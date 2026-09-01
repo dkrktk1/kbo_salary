@@ -1,0 +1,6 @@
+{
+  "name": "KBO Agency Dashboard",
+  "description": "KBO baseball agency dashboard for salary negotiation and player management with AI insights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
