@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, BarChart, Bar, Cell, ComposedChart, Line } from 'recharts';
 import { mockTeams, loadStoredPlayers, saveStoredPlayers, Team, Player } from '../data';
-import { fetchTeamRosterFromDatabase, DbTeamPlayer, cleanPosition } from '../services/dbService';
-import { Loader2, TrendingUp, AlertTriangle, Calculator, Sparkles, Database, RefreshCw, AlertCircle, ArrowUpDown, ArrowUp, ArrowDown, Filter } from 'lucide-react';
+import { fetchTeamRosterFromDatabase, DbTeamPlayer, cleanPosition, parsePlayerSalary } from '../services/dbService';
+import { Loader2, TrendingUp, AlertTriangle, Calculator, Sparkles, Database, RefreshCw, AlertCircle, ArrowUpDown, ArrowUp, ArrowDown, Filter, Search, X } from 'lucide-react';
 
 interface StatWeight {
   stat: string;
@@ -43,8 +43,47 @@ const formatCurrency = (value: number) => {
   return `${(roundedValue / 10000).toLocaleString()}만`;
 };
 
+const SESSION_STORAGE_KEY = 'teamTendencyData';
+
+// sessionStorage 헬퍼 함수
+const getStoredTendencyData = (): Record<string, DbTeamPlayer[]> | null => {
+  try {
+    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      const data: Record<string, DbTeamPlayer[]> = (parsed.rosters && typeof parsed.rosters === 'object') ? parsed.rosters : parsed;
+      // 각 선수 객체의 salary가 만원 단위(1억 미만 숫자, 예: 220000 -> 22억원)로 저장된 경우 parsePlayerSalary를 통해 보정
+      const normalized: Record<string, DbTeamPlayer[]> = {};
+      Object.entries(data).forEach(([teamName, list]) => {
+        if (Array.isArray(list)) {
+          normalized[teamName] = list.map((p) => ({
+            ...p,
+            salary: parsePlayerSalary(p.salary)
+          }));
+        }
+      });
+      return normalized;
+    }
+  } catch (e) {
+    console.error("sessionStorage 'teamTendencyData' 로드 오류:", e);
+  }
+  return null;
+};
+
+const saveStoredTendencyData = (data: Record<string, DbTeamPlayer[]>) => {
+  try {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.error("sessionStorage 'teamTendencyData' 저장 오류:", e);
+  }
+};
+
 export default function ReverseEngineering() {
-  const [selectedTeam, setSelectedTeam] = useState<Team>(mockTeams[0]);
+  const [selectedTeam, setSelectedTeam] = useState<Team>(() => {
+    const initialSorted = [...mockTeams].sort((a, b) => (b.currentPayroll || 0) - (a.currentPayroll || 0));
+    return initialSorted[0] || mockTeams[0];
+  });
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedPlayerForSim, setSelectedPlayerForSim] = useState<Player | null>(null);
@@ -52,21 +91,50 @@ export default function ReverseEngineering() {
   const [players, setPlayers] = useState<Player[]>(loadStoredPlayers);
   const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
 
-  // 구글 스프레드시트 DB 팀 로스터 상태 및 프론트엔드 캐시
-  const [teamDataCache, setTeamDataCache] = useState<Record<string, DbTeamPlayer[]>>({});
-  const teamDataCacheRef = useRef<Record<string, DbTeamPlayer[]>>({});
-  const [teamRoster, setTeamRoster] = useState<DbTeamPlayer[]>([]);
+  // 구글 스프레드시트 DB 팀 로스터 상태 및 프론트엔드/세션스토리지 캐시
+  const [teamDataCache, setTeamDataCache] = useState<Record<string, DbTeamPlayer[]>>(() => {
+    return getStoredTendencyData() || {};
+  });
+  const teamDataCacheRef = useRef<Record<string, DbTeamPlayer[]>>(getStoredTendencyData() || {});
+  const [teamRoster, setTeamRoster] = useState<DbTeamPlayer[]>(() => {
+    const cached = getStoredTendencyData();
+    const initialSorted = [...mockTeams].sort((a, b) => (b.currentPayroll || 0) - (a.currentPayroll || 0));
+    const defaultTeam = initialSorted[0] || mockTeams[0];
+    if (cached && cached[defaultTeam.name] && cached[defaultTeam.name].length > 0) {
+      return cached[defaultTeam.name];
+    }
+    return [];
+  });
   const [isRosterLoading, setIsRosterLoading] = useState<boolean>(false);
+  const [isAllTeamsRefreshing, setIsAllTeamsRefreshing] = useState<boolean>(false);
   const [rosterError, setRosterError] = useState<string | null>(null);
-  const [isDbLoaded, setIsDbLoaded] = useState<boolean>(false);
-  const [teamPayrollMap, setTeamPayrollMap] = useState<Record<string, number>>({});
+  const [isDbLoaded, setIsDbLoaded] = useState<boolean>(() => {
+    const cached = getStoredTendencyData();
+    const initialSorted = [...mockTeams].sort((a, b) => (b.currentPayroll || 0) - (a.currentPayroll || 0));
+    const defaultTeam = initialSorted[0] || mockTeams[0];
+    return !!(cached && cached[defaultTeam.name] && cached[defaultTeam.name].length > 0);
+  });
+  const [teamPayrollMap, setTeamPayrollMap] = useState<Record<string, number>>(() => {
+    const cached = getStoredTendencyData();
+    if (cached) {
+      const pMap: Record<string, number> = {};
+      Object.entries(cached).forEach(([tName, list]) => {
+        pMap[tName] = list.reduce((sum, p) => sum + (p.salary || 0), 0);
+      });
+      return pMap;
+    }
+    return {};
+  });
 
-  // 테이블 정렬 및 필터 상태
+  // 테이블 정렬 및 다중 카테고리 필터 상태
   type SortField = 'name' | 'age' | 'position' | 'war' | 'salary' | 'draftYear' | 'serviceTime';
   type SortDirection = 'asc' | 'desc';
+  type FilterCategory = 'ALL' | 'name' | 'age' | 'position' | 'war' | 'salary' | 'draftYear' | 'serviceTime';
+
   const [sortField, setSortField] = useState<SortField | null>('salary');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-  const [positionFilter, setPositionFilter] = useState<string>('ALL');
+  const [filterCategory, setFilterCategory] = useState<FilterCategory>('ALL');
+  const [filterQuery, setFilterQuery] = useState<string>('');
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -90,10 +158,95 @@ export default function ReverseEngineering() {
   const displayedRoster = useMemo(() => {
     let list = [...teamRoster];
 
-    if (positionFilter !== 'ALL') {
+    // 필터 조건 적용
+    if (filterCategory !== 'ALL') {
       list = list.filter((p) => {
-        const clean = cleanPosition(p.position);
-        return clean.includes(positionFilter);
+        // 1. 선수명 필터
+        if (filterCategory === 'name') {
+          if (!filterQuery || filterQuery.trim() === '') return true;
+          return p.name.toLowerCase().includes(filterQuery.trim().toLowerCase());
+        }
+
+        // 2. 나이 필터
+        if (filterCategory === 'age') {
+          if (!filterQuery || filterQuery === 'ALL') return true;
+          const ageNum = typeof p.age === 'number' ? p.age : parseInt(String(p.age)) || 0;
+          if (filterQuery === 'under_25') return ageNum <= 25;
+          if (filterQuery === '26_to_29') return ageNum >= 26 && ageNum <= 29;
+          if (filterQuery === '30_to_34') return ageNum >= 30 && ageNum <= 34;
+          if (filterQuery === 'over_35') return ageNum >= 35;
+          return true;
+        }
+
+        // 3. 포지션 필터
+        if (filterCategory === 'position') {
+          if (!filterQuery || filterQuery === 'ALL') return true;
+          const clean = cleanPosition(p.position);
+          if (filterQuery === '투수') return clean.includes('투수');
+          if (filterQuery === '포수') return clean.includes('포수');
+          if (filterQuery === '내야수') return clean.includes('내야') || clean.includes('1루') || clean.includes('2루') || clean.includes('3루') || clean.includes('유격');
+          if (filterQuery === '외야수') return clean.includes('외야') || clean.includes('좌익') || clean.includes('중견') || clean.includes('우익');
+          if (filterQuery === '지명타자') return clean.includes('지명');
+          return clean.includes(filterQuery);
+        }
+
+        // 4. 핵심 스탯 (WAR) 필터
+        if (filterCategory === 'war') {
+          if (!filterQuery || filterQuery === 'ALL') return true;
+          const warNum = typeof p.war === 'number' ? p.war : parseFloat(String(p.war)) || 0;
+          if (filterQuery === 'war_4_plus') return warNum >= 4.0;
+          if (filterQuery === 'war_2_5_to_4') return warNum >= 2.5 && warNum < 4.0;
+          if (filterQuery === 'war_1_to_2_5') return warNum >= 1.0 && warNum < 2.5;
+          if (filterQuery === 'war_0_to_1') return warNum >= 0.0 && warNum < 1.0;
+          if (filterQuery === 'war_under_0') return warNum < 0.0;
+          return true;
+        }
+
+        // 5. 현재 연봉 필터
+        if (filterCategory === 'salary') {
+          if (!filterQuery || filterQuery === 'ALL') return true;
+          const salaryWon = typeof p.salary === 'number' ? p.salary : parseInt(String(p.salary)) || 0;
+          if (filterQuery === 'salary_10uk_plus') return salaryWon >= 1000000000;
+          if (filterQuery === 'salary_5uk_to_10uk') return salaryWon >= 500000000 && salaryWon < 1000000000;
+          if (filterQuery === 'salary_1uk_to_5uk') return salaryWon >= 100000000 && salaryWon < 500000000;
+          if (filterQuery === 'salary_5000_to_1uk') return salaryWon >= 50000000 && salaryWon < 100000000;
+          if (filterQuery === 'salary_under_5000') return salaryWon < 50000000;
+          return true;
+        }
+
+        // 6. 입단 연도 필터
+        if (filterCategory === 'draftYear') {
+          if (!filterQuery || filterQuery === 'ALL') return true;
+          const draftNum = typeof p.draftYear === 'number' ? p.draftYear : parseInt(String(p.draftYear)) || 0;
+          if (filterQuery === 'draft_2022_plus') return draftNum >= 2022;
+          if (filterQuery === 'draft_2017_to_2021') return draftNum >= 2017 && draftNum <= 2021;
+          if (filterQuery === 'draft_2011_to_2016') return draftNum >= 2011 && draftNum <= 2016;
+          if (filterQuery === 'draft_2010_under') return draftNum > 0 && draftNum <= 2010;
+          return true;
+        }
+
+        // 7. 등록일수 필터
+        if (filterCategory === 'serviceTime') {
+          if (!filterQuery || filterQuery === 'ALL') return true;
+          const str = String(p.serviceTime || '');
+          let years = 0;
+          const matchYear = str.match(/(\d+)\s*년/);
+          if (matchYear) {
+            years = parseInt(matchYear[1], 10);
+          } else {
+            const matchDays = str.match(/(\d+)\s*일/);
+            const days = matchDays ? parseInt(matchDays[1], 10) : parseInt(str.replace(/[^0-9]/g, '')) || 0;
+            years = Math.floor(days / 145);
+          }
+
+          if (filterQuery === 'service_fa_plus') return years >= 7;
+          if (filterQuery === 'service_5_to_7') return years >= 5 && years < 7;
+          if (filterQuery === 'service_3_to_5') return years >= 3 && years < 5;
+          if (filterQuery === 'service_under_3') return years < 3;
+          return true;
+        }
+
+        return true;
       });
     }
 
@@ -131,7 +284,7 @@ export default function ReverseEngineering() {
     }
 
     return list;
-  }, [teamRoster, sortField, sortDirection, positionFilter]);
+  }, [teamRoster, sortField, sortDirection, filterCategory, filterQuery]);
 
   // 현재 테이블에 표시된 선수들의 연봉 총합 및 평균 연봉 계산
   const rosterTotalSalary = useMemo(() => {
@@ -150,13 +303,42 @@ export default function ReverseEngineering() {
     return () => window.removeEventListener("kbo_players_updated", handleUpdate);
   }, []);
 
-  // 10개 구단 전체의 로스터 총 연봉 비동기 로드 및 프론트엔드 캐시 사전 구축
+  // 10개 구단 전체의 로스터 총 연봉 비동기 로드 및 sessionStorage 캐싱
   useEffect(() => {
     let isMounted = true;
+
     const loadAllTeamPayrolls = async () => {
+      // 1. 컴포넌트가 마운트될 때 가장 먼저 sessionStorage.getItem('teamTendencyData') 확인
+      const storedData = getStoredTendencyData();
+      if (storedData && Object.keys(storedData).length > 0) {
+        console.log("⚡ [SessionStorage Hit] 세션 스토리지에서 구단 성향 데이터 즉시 복원 (fetch 통신 생략)");
+        if (isMounted) {
+          teamDataCacheRef.current = storedData;
+          setTeamDataCache(storedData);
+
+          const payrolls: Record<string, number> = {};
+          Object.entries(storedData).forEach(([tName, list]) => {
+            payrolls[tName] = Array.isArray(list) ? list.reduce((sum, p) => sum + (p.salary || 0), 0) : 0;
+          });
+          setTeamPayrollMap((prev) => ({ ...prev, ...payrolls }));
+
+          if (storedData[selectedTeam.name] && storedData[selectedTeam.name].length > 0) {
+            setTeamRoster(storedData[selectedTeam.name]);
+            setIsDbLoaded(true);
+            setIsRosterLoading(false);
+            setRosterError(null);
+          }
+        }
+        // 세션 스토리지에 데이터가 이미 존재하므로 fetch 통신 건너뜀
+        return;
+      }
+
+      // 2. 세션 스토리지에 데이터가 없는 경우: 기존처럼 구글 API로 fetch 통신 수행
+      console.log("🌐 [Initial DB Fetch] 세션 스토리지 캐시 없음 - 10개 구단 데이터 API 통신 시작");
       try {
         const payrolls: Record<string, number> = {};
         const preloaded: Record<string, DbTeamPlayer[]> = {};
+
         await Promise.all(
           mockTeams.map(async (team) => {
             try {
@@ -175,10 +357,21 @@ export default function ReverseEngineering() {
             }
           })
         );
+
         if (isMounted) {
           setTeamPayrollMap((prev) => ({ ...prev, ...payrolls }));
           teamDataCacheRef.current = { ...preloaded, ...teamDataCacheRef.current };
           setTeamDataCache((prev) => ({ ...preloaded, ...prev }));
+
+          if (preloaded[selectedTeam.name] && preloaded[selectedTeam.name].length > 0) {
+            setTeamRoster(preloaded[selectedTeam.name]);
+            setIsDbLoaded(true);
+            setIsRosterLoading(false);
+            setRosterError(null);
+          }
+
+          // 받아온 데이터를 State에 렌더링함과 동시에 sessionStorage에 임시 저장
+          saveStoredTendencyData(preloaded);
         }
       } catch (e) {
         console.error("전체 구단 연봉 및 캐시 로드 실패:", e);
@@ -190,6 +383,52 @@ export default function ReverseEngineering() {
       isMounted = false;
     };
   }, []);
+
+  // 10개 구단 전체 실시간 DB 강제 새로고침 (캐시 무시 및 최신화)
+  const refreshAllTeamsRosters = async () => {
+    setIsAllTeamsRefreshing(true);
+    setRosterError(null);
+    try {
+      const payrolls: Record<string, number> = {};
+      const preloaded: Record<string, DbTeamPlayer[]> = {};
+
+      await Promise.all(
+        mockTeams.map(async (team) => {
+          try {
+            const res = await fetchTeamRosterFromDatabase(team.name);
+            if (res.success && res.players && res.players.length > 0) {
+              const total = res.players.reduce((sum, p) => sum + (p.salary || 0), 0);
+              payrolls[team.name] = total;
+              preloaded[team.name] = res.players;
+            } else if (team.currentPayroll) {
+              payrolls[team.name] = team.currentPayroll;
+            }
+          } catch {
+            if (team.currentPayroll) {
+              payrolls[team.name] = team.currentPayroll;
+            }
+          }
+        })
+      );
+
+      setTeamPayrollMap((prev) => ({ ...prev, ...payrolls }));
+      teamDataCacheRef.current = { ...teamDataCacheRef.current, ...preloaded };
+      setTeamDataCache((prev) => ({ ...prev, ...preloaded }));
+
+      if (preloaded[selectedTeam.name] && preloaded[selectedTeam.name].length > 0) {
+        setTeamRoster(preloaded[selectedTeam.name]);
+        setIsDbLoaded(true);
+        setIsRosterLoading(false);
+      }
+
+      // sessionStorage 최신화
+      saveStoredTendencyData(preloaded);
+    } catch (e) {
+      console.error("10개 구단 전체 데이터 새로고침 실패:", e);
+    } finally {
+      setIsAllTeamsRefreshing(false);
+    }
+  };
 
   // 현재 활성화된 팀의 로스터가 로드되거나 변경되면 teamPayrollMap에 실시간 반영
   useEffect(() => {
@@ -208,28 +447,40 @@ export default function ReverseEngineering() {
   /**
    * 좌측 구단 리스트 클릭 또는 새로고침 시 실행되는 로스터 조회 함수
    * @param teamName 조회할 구단명
-   * @param forceRefresh true인 경우 캐시를 무시하고 구글 DB에서 실시간 강제 fetch 수행
+   * @param forceRefresh true인 경우 sessionStorage 캐시를 무시하고 구글 DB에서 실시간 강제 fetch 수행
    */
   const loadTeamRoster = async (teamName: string, forceRefresh = false) => {
-    // 1. 캐시 검사 (강제 새로고침이 아닐 때 캐시 데이터가 있으면 fetch 생략하고 즉시 렌더링)
-    const cachedPlayers = teamDataCacheRef.current[teamName] || teamDataCache[teamName];
-    if (!forceRefresh && cachedPlayers && cachedPlayers.length > 0) {
-      console.log(`⚡ [Cache Hit] '${teamName}' 구단 데이터 캐시 즉시 렌더링 (${cachedPlayers.length}명)`);
-      setTeamRoster(cachedPlayers);
-      setIsDbLoaded(true);
-      setIsRosterLoading(false);
-      setRosterError(null);
-      return;
+    // 1. 강제 새로고침이 아닐 때: 세션 스토리지 및 메모리 캐시 확인
+    if (!forceRefresh) {
+      let cachedPlayers = teamDataCacheRef.current[teamName] || teamDataCache[teamName];
+      if (!cachedPlayers) {
+        const stored = getStoredTendencyData();
+        if (stored && stored[teamName] && stored[teamName].length > 0) {
+          cachedPlayers = stored[teamName];
+          teamDataCacheRef.current[teamName] = cachedPlayers;
+          setTeamDataCache((prev) => ({ ...prev, [teamName]: cachedPlayers }));
+        }
+      }
+
+      if (cachedPlayers && cachedPlayers.length > 0) {
+        console.log(`⚡ [Cache Hit] '${teamName}' 구단 데이터 캐시 즉시 렌더링 (${cachedPlayers.length}명)`);
+        setTeamRoster(cachedPlayers);
+        setIsDbLoaded(true);
+        setIsRosterLoading(false);
+        setRosterError(null);
+        return;
+      }
     }
 
-    // 2. 캐시 미스 또는 강제 새로고침인 경우: fetch 통신 실행
+    // 2. 캐시 미스 또는 사용자가 수동 새로고침 버튼을 누른 경우(forceRefresh = true):
+    // sessionStorage 캐시를 무시하고 무조건 fetch API(타임스탬프 포함) 호출
     console.log(`🌐 [DB Fetch] '${teamName}' 구단 데이터 서버 요청 (강제 새로고침: ${forceRefresh})`);
     setIsRosterLoading(true);
     setRosterError(null);
     try {
       const res = await fetchTeamRosterFromDatabase(teamName);
       if (res.success && res.players && res.players.length > 0) {
-        // React 상태 및 프론트엔드 캐시 업데이트
+        // React 상태 업데이트
         teamDataCacheRef.current[teamName] = res.players;
         setTeamDataCache((prev) => ({
           ...prev,
@@ -243,6 +494,14 @@ export default function ReverseEngineering() {
           ...prev,
           [teamName]: currentTotal
         }));
+
+        // 새 데이터를 받아오면 sessionStorage의 기존 데이터도 최신 데이터로 덮어쓰기(업데이트)
+        const currentStored = getStoredTendencyData() || {};
+        const updatedStored = {
+          ...currentStored,
+          [teamName]: res.players
+        };
+        saveStoredTendencyData(updatedStored);
       } else {
         // DB에 없을 경우 로컬 플레이어 데이터셋에서 필터링하여 폴백 제공
         const localTeamPlayers = players.filter((p) => p.team === teamName || p.team.includes(teamName.replace(/^[A-Z\s]+/, '')));
@@ -265,6 +524,13 @@ export default function ReverseEngineering() {
           }));
           setTeamRoster(convertedLocal);
           setIsDbLoaded(false);
+
+          const currentStored = getStoredTendencyData() || {};
+          const updatedStored = {
+            ...currentStored,
+            [teamName]: convertedLocal
+          };
+          saveStoredTendencyData(updatedStored);
         } else {
           setTeamRoster([]);
           setIsDbLoaded(false);
@@ -304,6 +570,12 @@ export default function ReverseEngineering() {
         const nextList = prev.filter(p => p.id !== id);
         teamDataCacheRef.current[selectedTeam.name] = nextList;
         setTeamDataCache(cache => ({ ...cache, [selectedTeam.name]: nextList }));
+        
+        const currentStored = getStoredTendencyData() || {};
+        saveStoredTendencyData({
+          ...currentStored,
+          [selectedTeam.name]: nextList
+        });
         return nextList;
       });
       if (selectedPlayerForSim?.id === id) setSelectedPlayerForSim(null);
@@ -330,7 +602,7 @@ export default function ReverseEngineering() {
     setPlayers(updated);
     saveStoredPlayers(updated);
     
-    // 로스터 테이블 및 캐시에도 실시간 반영
+    // 로스터 테이블 및 캐시, sessionStorage에도 실시간 반영
     setTeamRoster(prev => {
       const nextList = prev.map(p => {
         if (p.name === updatedPlayer.name || p.id === updatedPlayer.id) {
@@ -349,6 +621,12 @@ export default function ReverseEngineering() {
       });
       teamDataCacheRef.current[selectedTeam.name] = nextList;
       setTeamDataCache(cache => ({ ...cache, [selectedTeam.name]: nextList }));
+      
+      const currentStored = getStoredTendencyData() || {};
+      saveStoredTendencyData({
+        ...currentStored,
+        [selectedTeam.name]: nextList
+      });
       return nextList;
     });
 
@@ -446,56 +724,69 @@ export default function ReverseEngineering() {
   };
 
   const sortedTeams = useMemo(() => {
-    return mockTeams.map((team) => {
-      const isSelected = selectedTeam.id === team.id;
-      // 선택된 팀인 경우 현재 로스터 테이블의 실제 총 연봉을 최우선 연동
-      let totalPayroll: number;
-      if (isSelected && teamRoster.length > 0) {
-        totalPayroll = teamRoster.reduce((sum, p) => sum + (p.salary || 0), 0);
-      } else if (teamPayrollMap[team.name] !== undefined) {
-        totalPayroll = teamPayrollMap[team.name];
-      } else {
-        totalPayroll = team.currentPayroll || 0;
-      }
-      return { ...team, calculatedPayroll: totalPayroll };
-    });
+    return mockTeams
+      .map((team) => {
+        const isSelected = selectedTeam.id === team.id;
+        // 선택된 팀인 경우 현재 로스터 테이블의 실제 총 연봉을 최우선 연동
+        let totalPayroll: number;
+        if (isSelected && teamRoster.length > 0) {
+          totalPayroll = teamRoster.reduce((sum, p) => sum + (p.salary || 0), 0);
+        } else if (teamPayrollMap[team.name] !== undefined) {
+          totalPayroll = teamPayrollMap[team.name];
+        } else {
+          totalPayroll = team.currentPayroll || 0;
+        }
+        return { ...team, calculatedPayroll: totalPayroll };
+      })
+      .sort((a, b) => (b.calculatedPayroll || 0) - (a.calculatedPayroll || 0));
   }, [teamPayrollMap, selectedTeam.id, selectedTeam.name, teamRoster]);
 
   return (
-    <div className="flex h-full w-full bg-dark-main overflow-hidden text-gray-200">
+    <div className="flex h-full w-full bg-[#0B0D14] overflow-hidden text-gray-200">
       {/* 좌측 25%: 구단 선택 패널 */}
-      <div className="w-1/4 min-w-[250px] border-r border-white/5 bg-dark-aside flex flex-col">
-        <div className="p-5 border-b border-white/5">
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-gold" />
-            구단 연봉 산정 역산
-          </h2>
-          <p className="text-xs text-gray-400 mt-2 tracking-tight leading-relaxed">
+      <div className="w-1/4 min-w-[260px] max-w-[320px] border-r border-white/10 bg-[#0E111A] flex flex-col">
+        <div className="p-5 border-b border-white/10 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-gold" />
+              구단 연봉 산정 역산
+            </h2>
+            <button
+              onClick={refreshAllTeamsRosters}
+              disabled={isAllTeamsRefreshing}
+              title="10개 구단 전체 데이터 구글 DB에서 최신으로 새로고침"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gold/15 hover:bg-gold/25 text-gold border border-gold/30 text-[11px] font-bold transition-all cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3 h-3 ${isAllTeamsRefreshing ? 'animate-spin' : ''}`} />
+              <span className="whitespace-nowrap">{isAllTeamsRefreshing ? '동기화 중...' : '전체 새로고침'}</span>
+            </button>
+          </div>
+          <p className="text-[11px] text-gray-400 tracking-tight leading-relaxed">
             AI가 구단의 연봉 협상 기준을 역추적하여 가장 가중치가 높은 스탯을 분석합니다.
           </p>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
           {sortedTeams.map((team) => {
             const isSelected = selectedTeam.id === team.id;
             return (
               <button
                 key={team.id}
                 onClick={() => setSelectedTeam(team)}
-                className={`w-full text-left px-4 py-3 rounded-xl transition-all duration-300 ${
+                className={`w-full text-left px-3.5 py-3 rounded-xl transition-all duration-200 cursor-pointer ${
                   isSelected
-                    ? 'bg-gold/10 border border-gold/30 text-white shadow-sm'
-                    : 'bg-black/20 border border-white/5 text-gray-400 hover:bg-white/5 hover:text-white'
+                    ? 'bg-gold/15 border border-gold/40 text-white shadow-lg shadow-gold/10'
+                    : 'bg-[#131722]/50 border border-white/5 text-gray-400 hover:bg-[#131722] hover:text-white hover:border-white/10'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <div className="font-bold">{team.name}</div>
+                  <div className={`font-bold text-sm ${isSelected ? 'text-gold' : 'text-white'}`}>{team.name}</div>
                   {isSelected && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-gold animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-gold animate-pulse" />
                   )}
                 </div>
-                <div className="text-xs mt-1 font-medium flex items-center justify-between">
-                  <span className="opacity-70">총 연봉:</span>
-                  <span className={`font-mono ${isSelected ? 'text-gold font-bold' : 'text-gray-300'}`}>
+                <div className="text-[11px] mt-1 font-medium flex items-center justify-between">
+                  <span className="text-gray-500">총 연봉:</span>
+                  <span className={`font-mono font-bold ${isSelected ? 'text-gold' : 'text-gray-300'}`}>
                     {team.calculatedPayroll > 0 ? formatCurrency(team.calculatedPayroll) : '조회 중...'}
                   </span>
                 </div>
@@ -506,63 +797,202 @@ export default function ReverseEngineering() {
       </div>
 
       {/* 우측 75%: 대시보드 */}
-      <div className="w-3/4 flex flex-col h-full overflow-y-auto p-6 gap-6 bg-dark-bg">
+      <div className="flex-1 flex flex-col h-full overflow-y-auto p-6 gap-6 bg-[#0B0D14]">
         {/* 최상단: 인터랙티브 로스터 테이블 */}
-        <div className="min-h-[350px] bg-black/40 border border-white/5 rounded-2xl flex flex-col overflow-hidden shrink-0">
-          <div className="p-5 border-b border-white/5 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+        <div className="min-h-[350px] bg-[#131722] border border-white/10 rounded-2xl flex flex-col overflow-hidden shrink-0 shadow-xl">
+          <div className="p-4 md:p-5 border-b border-white/10 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white">인터랙티브 로스터 테이블 ({selectedTeam.name})</h3>
+                <h3 className="text-sm md:text-base font-bold text-white flex items-center gap-2">
+                  <span>{selectedTeam.name}</span> 인터랙티브 로스터
+                </h3>
                 {isDbLoaded ? (
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-semibold font-mono flex items-center gap-1">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-bold font-mono flex items-center gap-1">
                     <Database className="w-3 h-3" />
-                    Google DB 실시간 연동
+                    Google DB 연동
                   </span>
                 ) : (
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-400 font-semibold font-mono">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-400 font-bold font-mono">
                     로컬/기본 로스터
                   </span>
                 )}
               </div>
 
               {/* 제목 영역: 연봉 총합 및 평균 연봉 표시 */}
-              <div className="flex items-center gap-2.5 bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg text-xs">
+              <div className="flex items-center gap-2.5 bg-black/40 border border-white/10 px-3 py-1.5 rounded-xl text-xs">
                 <div className="flex items-center gap-1.5 text-gray-300">
-                  <span className="text-gray-400">총 연봉:</span>
-                  <span className="font-bold text-gold">{formatCurrency(rosterTotalSalary)}</span>
+                  <span className="text-gray-400 text-[11px]">총 연봉:</span>
+                  <span className="font-bold font-mono text-gold">{formatCurrency(rosterTotalSalary)}</span>
                 </div>
                 <span className="text-white/20">|</span>
                 <div className="flex items-center gap-1.5 text-gray-300">
-                  <span className="text-gray-400">평균 연봉:</span>
-                  <span className="font-bold text-emerald-400">{formatCurrency(rosterAvgSalary)}</span>
-                  <span className="text-[11px] text-gray-400 font-mono">({rosterPlayerCount}명)</span>
+                  <span className="text-gray-400 text-[11px]">평균:</span>
+                  <span className="font-bold font-mono text-emerald-400">{formatCurrency(rosterAvgSalary)}</span>
+                  <span className="text-[10px] text-gray-400 font-mono">({rosterPlayerCount}명)</span>
                 </div>
               </div>
             </div>
             
             <div className="flex flex-wrap items-center gap-2">
-              {/* 포지션 필터 */}
-              <div className="flex items-center gap-1 bg-white/5 border border-white/10 rounded-lg p-1 text-xs">
-                <Filter className="w-3.5 h-3.5 text-gray-400 ml-1" />
+              {/* 항목별 다기능 필터 컨트롤 */}
+              <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 rounded-xl p-1 text-xs">
+                <div className="flex items-center gap-1 text-gray-400 pl-1.5">
+                  <Filter className="w-3.5 h-3.5 text-gold shrink-0" />
+                  <span className="text-[11px] text-gray-400 font-bold whitespace-nowrap">필터:</span>
+                </div>
+                
                 <select
-                  value={positionFilter}
-                  onChange={(e) => setPositionFilter(e.target.value)}
-                  className="bg-transparent text-gray-200 text-xs px-2 py-1 font-medium focus:outline-none cursor-pointer"
-                  title="포지션 필터"
+                  value={filterCategory}
+                  onChange={(e) => {
+                    const cat = e.target.value as FilterCategory;
+                    setFilterCategory(cat);
+                    setFilterQuery(cat === 'name' ? '' : 'ALL');
+                  }}
+                  className="bg-black/60 text-gray-200 text-xs px-2.5 py-1.5 rounded-lg border border-white/10 font-medium focus:outline-none focus:border-gold cursor-pointer"
+                  title="필터 기준 항목 선택"
                 >
-                  <option value="ALL" className="bg-dark-bg text-gray-200">전체 포지션</option>
-                  <option value="투수" className="bg-dark-bg text-gray-200">투수</option>
-                  <option value="포수" className="bg-dark-bg text-gray-200">포수</option>
-                  <option value="내야수" className="bg-dark-bg text-gray-200">내야수</option>
-                  <option value="외야수" className="bg-dark-bg text-gray-200">외야수</option>
+                  <option value="ALL" className="bg-dark-bg text-gray-200">전체 항목</option>
+                  <option value="name" className="bg-dark-bg text-gray-200">선수명</option>
+                  <option value="age" className="bg-dark-bg text-gray-200">나이</option>
+                  <option value="position" className="bg-dark-bg text-gray-200">포지션</option>
+                  <option value="war" className="bg-dark-bg text-gray-200">핵심 스탯(WAR)</option>
+                  <option value="salary" className="bg-dark-bg text-gray-200">현재 연봉</option>
+                  <option value="draftYear" className="bg-dark-bg text-gray-200">입단 연도</option>
+                  <option value="serviceTime" className="bg-dark-bg text-gray-200">등록일수</option>
                 </select>
+
+                {/* 서브 필터 컨트롤 */}
+                {filterCategory === 'name' && (
+                  <div className="relative flex items-center">
+                    <Search className="w-3 h-3 text-gray-400 absolute left-2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={filterQuery}
+                      onChange={(e) => setFilterQuery(e.target.value)}
+                      placeholder="선수명 검색..."
+                      className="bg-black/60 border border-white/20 rounded pl-7 pr-6 py-1 text-xs text-white focus:outline-none focus:border-gold w-32 placeholder:text-gray-500"
+                    />
+                    {filterQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setFilterQuery('')}
+                        className="absolute right-1.5 text-gray-400 hover:text-white"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {filterCategory === 'age' && (
+                  <select
+                    value={filterQuery}
+                    onChange={(e) => setFilterQuery(e.target.value)}
+                    className="bg-black/60 border border-white/20 rounded text-gray-200 text-xs px-2 py-1 font-medium focus:outline-none focus:border-gold cursor-pointer"
+                  >
+                    <option value="ALL" className="bg-dark-bg text-gray-200">전체 나이</option>
+                    <option value="under_25" className="bg-dark-bg text-gray-200">25세 이하 (유망주)</option>
+                    <option value="26_to_29" className="bg-dark-bg text-gray-200">26세 ~ 29세 (전성기)</option>
+                    <option value="30_to_34" className="bg-dark-bg text-gray-200">30세 ~ 34세 (베테랑)</option>
+                    <option value="over_35" className="bg-dark-bg text-gray-200">35세 이상 (최고참)</option>
+                  </select>
+                )}
+
+                {filterCategory === 'position' && (
+                  <select
+                    value={filterQuery}
+                    onChange={(e) => setFilterQuery(e.target.value)}
+                    className="bg-black/60 border border-white/20 rounded text-gray-200 text-xs px-2 py-1 font-medium focus:outline-none focus:border-gold cursor-pointer"
+                  >
+                    <option value="ALL" className="bg-dark-bg text-gray-200">전체 포지션</option>
+                    <option value="투수" className="bg-dark-bg text-gray-200">투수</option>
+                    <option value="포수" className="bg-dark-bg text-gray-200">포수</option>
+                    <option value="내야수" className="bg-dark-bg text-gray-200">내야수</option>
+                    <option value="외야수" className="bg-dark-bg text-gray-200">외야수</option>
+                    <option value="지명타자" className="bg-dark-bg text-gray-200">지명타자</option>
+                  </select>
+                )}
+
+                {filterCategory === 'war' && (
+                  <select
+                    value={filterQuery}
+                    onChange={(e) => setFilterQuery(e.target.value)}
+                    className="bg-black/60 border border-white/20 rounded text-gray-200 text-xs px-2 py-1 font-medium focus:outline-none focus:border-gold cursor-pointer"
+                  >
+                    <option value="ALL" className="bg-dark-bg text-gray-200">전체 스탯</option>
+                    <option value="war_4_plus" className="bg-dark-bg text-gray-200">WAR 4.0 이상 (특급/MVP)</option>
+                    <option value="war_2_5_to_4" className="bg-dark-bg text-gray-200">WAR 2.5 ~ 4.0 (주전급)</option>
+                    <option value="war_1_to_2_5" className="bg-dark-bg text-gray-200">WAR 1.0 ~ 2.5 (로테이션)</option>
+                    <option value="war_0_to_1" className="bg-dark-bg text-gray-200">WAR 0.0 ~ 1.0 (대체선수)</option>
+                    <option value="war_under_0" className="bg-dark-bg text-gray-200">WAR 0.0 미만 (부진)</option>
+                  </select>
+                )}
+
+                {filterCategory === 'salary' && (
+                  <select
+                    value={filterQuery}
+                    onChange={(e) => setFilterQuery(e.target.value)}
+                    className="bg-black/60 border border-white/20 rounded text-gray-200 text-xs px-2 py-1 font-medium focus:outline-none focus:border-gold cursor-pointer"
+                  >
+                    <option value="ALL" className="bg-dark-bg text-gray-200">전체 연봉</option>
+                    <option value="salary_10uk_plus" className="bg-dark-bg text-gray-200">10억원 이상 (초고액)</option>
+                    <option value="salary_5uk_to_10uk" className="bg-dark-bg text-gray-200">5억 ~ 10억원 (고액)</option>
+                    <option value="salary_1uk_to_5uk" className="bg-dark-bg text-gray-200">1억 ~ 5억원 (억대 연봉)</option>
+                    <option value="salary_5000_to_1uk" className="bg-dark-bg text-gray-200">5,000만 ~ 1억원</option>
+                    <option value="salary_under_5000" className="bg-dark-bg text-gray-200">5,000만원 미만</option>
+                  </select>
+                )}
+
+                {filterCategory === 'draftYear' && (
+                  <select
+                    value={filterQuery}
+                    onChange={(e) => setFilterQuery(e.target.value)}
+                    className="bg-black/60 border border-white/20 rounded text-gray-200 text-xs px-2 py-1 font-medium focus:outline-none focus:border-gold cursor-pointer"
+                  >
+                    <option value="ALL" className="bg-dark-bg text-gray-200">전체 연도</option>
+                    <option value="draft_2022_plus" className="bg-dark-bg text-gray-200">2022년 이후 (루키/신예)</option>
+                    <option value="draft_2017_to_2021" className="bg-dark-bg text-gray-200">2017년 ~ 2021년 입단</option>
+                    <option value="draft_2011_to_2016" className="bg-dark-bg text-gray-200">2011년 ~ 2016년 입단</option>
+                    <option value="draft_2010_under" className="bg-dark-bg text-gray-200">2010년 이전 (베테랑)</option>
+                  </select>
+                )}
+
+                {filterCategory === 'serviceTime' && (
+                  <select
+                    value={filterQuery}
+                    onChange={(e) => setFilterQuery(e.target.value)}
+                    className="bg-black/60 border border-white/20 rounded text-gray-200 text-xs px-2 py-1 font-medium focus:outline-none focus:border-gold cursor-pointer"
+                  >
+                    <option value="ALL" className="bg-dark-bg text-gray-200">전체 등록일수</option>
+                    <option value="service_fa_plus" className="bg-dark-bg text-gray-200">7년 이상 (FA 대상/임박)</option>
+                    <option value="service_5_to_7" className="bg-dark-bg text-gray-200">5년 ~ 7년 미만</option>
+                    <option value="service_3_to_5" className="bg-dark-bg text-gray-200">3년 ~ 5년 미만</option>
+                    <option value="service_under_3" className="bg-dark-bg text-gray-200">3년 미만 (저연차)</option>
+                  </select>
+                )}
+
+                {/* 필터 활성화 시 해제 버튼 */}
+                {filterCategory !== 'ALL' && filterQuery !== 'ALL' && filterQuery !== '' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterCategory('ALL');
+                      setFilterQuery('');
+                    }}
+                    title="필터 초기화"
+                    className="flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 bg-amber-400/10 hover:bg-amber-400/20 border border-amber-400/30 px-1.5 py-0.5 rounded transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <X className="w-3 h-3" />
+                    <span>해제</span>
+                  </button>
+                )}
               </div>
 
               <button
                 onClick={() => loadTeamRoster(selectedTeam.name, true)}
                 disabled={isRosterLoading}
                 title="구글 DB 최신 로스터 강제 새로고침 (캐시 갱신)"
-                className="flex items-center gap-1.5 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 px-3 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                className="flex items-center gap-1.5 bg-black/40 hover:bg-black/60 text-gray-300 border border-white/10 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isRosterLoading ? 'animate-spin text-gold' : ''}`} />
                 <span>새로고침</span>
@@ -571,18 +1001,18 @@ export default function ReverseEngineering() {
               {!analysisResult && !isLoading && (
                 <button 
                   onClick={() => fetchAnalysis(selectedTeam)}
-                  className="flex items-center gap-2 bg-gold/10 hover:bg-gold/20 text-gold border border-gold/30 px-4 py-2 rounded-lg text-sm font-bold transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 bg-gradient-to-r from-gold to-amber-500 hover:from-amber-400 hover:to-gold text-black font-bold px-3.5 py-1.5 rounded-xl text-xs transition-all shadow-md shadow-gold/20 active:scale-[0.98] cursor-pointer"
                 >
-                  <Sparkles className="w-4 h-4" />
-                  AI 구단 성향 진단 시작
+                  <Sparkles className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>AI 구단 성향 진단 시작</span>
                 </button>
               )}
             </div>
 
           </div>
           <div className="flex-1 overflow-y-auto max-h-[420px]">
-            <table className="w-full text-center text-xs text-gray-300">
-              <thead className="bg-black/50 text-xs uppercase text-gray-500 sticky top-0 z-10 border-b border-white/5">
+            <table className="w-full text-center text-xs text-gray-300 border-collapse">
+              <thead className="bg-black/60 text-[11px] uppercase text-gray-400 sticky top-0 z-10 border-b border-white/10 backdrop-blur-md">
                 <tr>
                   <th 
                     onClick={() => handleSort('name')}
@@ -691,7 +1121,7 @@ export default function ReverseEngineering() {
                     <td colSpan={8} className="py-12 text-center text-gray-400">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <Loader2 className="w-6 h-6 animate-spin text-gold" />
-                        <span className="text-sm font-medium">Google 스프레드시트 DB에서 '{selectedTeam.name}' 선수단 로스터를 조회 중입니다...</span>
+                        <span className="text-xs font-medium">Google DB에서 '{selectedTeam.name}' 선수단 로스터를 조회 중입니다...</span>
                       </div>
                     </td>
                   </tr>
@@ -700,13 +1130,13 @@ export default function ReverseEngineering() {
                     <td colSpan={8} className="py-12 text-center text-gray-400">
                       <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
                         <AlertCircle className="w-6 h-6 text-amber-400" />
-                        <span className="text-sm font-bold text-gray-300">
-                          {teamRoster.length > 0 && positionFilter !== 'ALL' 
-                            ? `'${positionFilter}' 포지션에 해당하는 선수가 없습니다` 
+                        <span className="text-xs font-bold text-gray-300">
+                          {teamRoster.length > 0 && filterCategory !== 'ALL' && filterQuery !== 'ALL' && filterQuery !== ''
+                            ? '선택하신 필터 조건에 부합하는 선수가 없습니다' 
                             : '해당 구단에 등록된 선수가 없습니다'}
                         </span>
-                        <p className="text-xs text-gray-500">
-                          {rosterError || `'${selectedTeam.name}' 소속 선수가 구글 스프레드시트 DB에 존재하지 않습니다.`}
+                        <p className="text-[11px] text-gray-500">
+                          {rosterError || (teamRoster.length > 0 ? '다른 필터 조건을 선택하거나 필터를 해제해 보세요.' : `'${selectedTeam.name}' 소속 선수가 구글 스프레드시트 DB에 존재하지 않습니다.`)}
                         </p>
                       </div>
                     </td>
@@ -721,17 +1151,17 @@ export default function ReverseEngineering() {
                       <tr 
                         key={idx}
                         id={`player-row-${pData.name}`}
-                        className={`transition-colors duration-300 hover:bg-white/5 ${isSelected ? 'bg-gold/10 border-l-2 border-gold' : 'border-l-2 border-transparent'}`}
+                        className={`transition-colors duration-200 hover:bg-white/5 ${isSelected ? 'bg-gold/15 border-l-2 border-gold' : 'border-l-2 border-transparent'}`}
                       >
                         <td className="px-2 py-2.5 font-bold text-white text-xs font-sans text-center whitespace-nowrap">{pData.name}</td>
                         <td className="px-1.5 py-2.5 text-xs font-sans text-center whitespace-nowrap text-gray-300">{pData.age}</td>
                         <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap font-medium text-gray-200">{posText}</td>
-                        <td className="px-2 py-2.5 text-xs font-sans text-center text-gold font-semibold whitespace-nowrap">{warText}</td>
-                        <td className="px-2.5 py-2.5 text-xs font-sans text-center font-medium whitespace-nowrap">{formatCurrency(pData.salary)}</td>
+                        <td className="px-2 py-2.5 text-xs font-mono text-center text-gold font-bold whitespace-nowrap">{warText}</td>
+                        <td className="px-2.5 py-2.5 text-xs font-mono text-center font-bold text-emerald-400 whitespace-nowrap">{formatCurrency(pData.salary)}</td>
                         <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap text-gray-300">{pData.draftYearDisplay || (typeof pData.draftYear === 'number' ? `${pData.draftYear}년` : pData.draftYear)}</td>
                         <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap text-gray-300">{pData.serviceTime}</td>
                         <td className="px-2 py-2.5 text-center whitespace-nowrap text-xs font-sans">
-                          <button onClick={() => handleEditPlayer(pData)} className="text-blue-400 hover:text-blue-300 mr-2 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap">수정</button>
+                          <button onClick={() => handleEditPlayer(pData)} className="text-amber-400 hover:text-amber-300 mr-2 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap">수정</button>
                           <button onClick={() => handleDeletePlayer(pData.id)} className="text-red-400 hover:text-red-300 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap">삭제</button>
                         </td>
                       </tr>
@@ -749,13 +1179,13 @@ export default function ReverseEngineering() {
                       {rosterPlayerCount > 0 ? `${(displayedRoster.reduce((sum, p) => sum + (typeof p.age === 'number' ? p.age : parseInt(String(p.age)) || 26), 0) / rosterPlayerCount).toFixed(1)}세` : '-'}
                     </td>
                     <td className="px-2 py-2.5 text-center text-gray-400 whitespace-nowrap">
-                      {positionFilter === 'ALL' ? '전체' : positionFilter}
+                      {filterCategory === 'position' && filterQuery !== 'ALL' ? filterQuery : '전체'}
                     </td>
                     <td className="px-2 py-2.5 text-center font-bold text-gold whitespace-nowrap">
                       평균 {rosterAvgWar}
                     </td>
                     <td className="px-2.5 py-2.5 text-center whitespace-nowrap">
-                      <div className="flex items-center justify-center gap-1 whitespace-nowrap">
+                      <div className="flex items-center justify-center gap-1 whitespace-nowrap font-mono">
                         <span className="font-bold text-gold text-xs">{formatCurrency(rosterTotalSalary)}</span>
                         <span className="text-[10px] text-emerald-400 font-semibold">(평균 {formatCurrency(rosterAvgSalary)})</span>
                       </div>
@@ -774,7 +1204,11 @@ export default function ReverseEngineering() {
             <div className="flex items-center gap-2">
               <span className="text-gray-400">선수단 인원:</span>
               <span className="font-bold text-white font-mono">{rosterPlayerCount}명</span>
-              {positionFilter !== 'ALL' && <span className="text-gold font-medium">({positionFilter} 필터 적용)</span>}
+              {filterCategory !== 'ALL' && filterQuery !== 'ALL' && filterQuery !== '' && (
+                <span className="text-gold font-medium">
+                  ({filterCategory === 'name' ? `선수명: "${filterQuery}"` : filterCategory === 'age' ? '나이 필터' : filterCategory === 'position' ? `${filterQuery}` : filterCategory === 'war' ? '스탯(WAR) 필터' : filterCategory === 'salary' ? '연봉 필터' : filterCategory === 'draftYear' ? '입단연도 필터' : '등록일수 필터'} 적용)
+                </span>
+              )}
               {sortField && (
                 <span className="text-gray-500 text-[11px] ml-1">
                   • 정렬: {sortField === 'name' ? '선수명' : sortField === 'age' ? '나이' : sortField === 'position' ? '포지션' : sortField === 'war' ? 'WAR' : sortField === 'salary' ? '현재 연봉' : sortField === 'draftYear' ? '입단 연도' : '등록일수'} ({sortDirection === 'asc' ? '오름차순 ↑' : '내림차순 ↓'})
@@ -782,15 +1216,15 @@ export default function ReverseEngineering() {
               )}
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 font-mono">
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-400">현재 연봉 총합:</span>
-                <span className="font-bold text-gold text-sm font-mono">{formatCurrency(rosterTotalSalary)}</span>
+                <span className="font-bold text-gold text-sm">{formatCurrency(rosterTotalSalary)}</span>
               </div>
               <span className="text-white/20">|</span>
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-400">선수 1인당 평균 연봉:</span>
-                <span className="font-bold text-emerald-400 text-sm font-mono">{formatCurrency(rosterAvgSalary)}</span>
+                <span className="font-bold text-emerald-400 text-sm">{formatCurrency(rosterAvgSalary)}</span>
               </div>
             </div>
           </div>
@@ -798,44 +1232,56 @@ export default function ReverseEngineering() {
 
         {/* AI Analysis Sections */}
         {isLoading ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-4 min-h-[200px]">
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-4 min-h-[220px] bg-[#131722] border border-white/10 rounded-2xl p-8 shadow-xl">
             <Loader2 className="w-8 h-8 animate-spin text-gold" />
-            <p>AI 모델이 {selectedTeam.name}의 연봉 구조를 역산하고 있습니다...</p>
+            <p className="text-xs font-medium">AI 모델이 {selectedTeam.name}의 연봉 구조를 역산하고 있습니다...</p>
           </div>
         ) : analysisResult ? (
           <>
             {/* 상단: 스탯 가중치 분석 */}
-            <div className="grid grid-cols-2 gap-6 min-h-[200px]">
-              <div className="bg-black/40 border border-white/5 rounded-2xl p-4 flex flex-col">
-                <h3 className="text-xs uppercase tracking-widest font-bold text-gray-400 mb-4 text-center">타자 연봉 가중치 추정</h3>
-                <div className="flex-1 min-h-[120px]">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 min-h-[200px]">
+              <div className="bg-[#131722] border border-white/10 rounded-2xl p-5 flex flex-col shadow-xl">
+                <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+                  <h3 className="text-xs uppercase tracking-wider font-bold text-white flex items-center gap-2">
+                    <TrendingUp className="w-3.5 h-3.5 text-gold" />
+                    타자 연봉 가중치 추정
+                  </h3>
+                  <span className="text-[10px] font-mono text-gold px-2 py-0.5 rounded bg-gold/15 border border-gold/30">wRC+ / WAR 중심</span>
+                </div>
+                <div className="flex-1 min-h-[130px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={analysisResult.stat_weights.batter} layout="vertical" margin={{ top: 0, right: 30, left: 10, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="rgba(255,255,255,0.05)" />
                       <XAxis type="number" hide />
-                      <YAxis dataKey="stat" type="category" stroke="#9ca3af" tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 'bold' }} width={60} axisLine={false} tickLine={false} />
-                      <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ backgroundColor: '#111318', borderColor: 'rgba(255,255,255,0.1)', borderRadius: '8px' }} />
-                      <Bar dataKey="weight" radius={[0, 4, 4, 0]} barSize={24}>
-                        {analysisResult.stat_weights.batter.map((entry, index) => (
-                          <Cell key={index} fill={index === 0 ? '#d4af37' : '#3b82f6'} />
+                      <YAxis dataKey="stat" type="category" stroke="#9ca3af" tick={{ fill: '#e5e7eb', fontSize: 12, fontWeight: 'bold' }} width={60} axisLine={false} tickLine={false} />
+                      <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ backgroundColor: '#131722', borderColor: 'rgba(255,255,255,0.15)', borderRadius: '10px', color: '#fff' }} />
+                      <Bar dataKey="weight" radius={[0, 6, 6, 0]} barSize={24}>
+                        {analysisResult.stat_weights.batter.map((_, index) => (
+                          <Cell key={index} fill={index === 0 ? '#E5A93C' : 'rgba(229,169,60,0.5)'} />
                         ))}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </div>
-              <div className="bg-black/40 border border-white/5 rounded-2xl p-4 flex flex-col">
-                <h3 className="text-xs uppercase tracking-widest font-bold text-gray-400 mb-4 text-center">투수 연봉 가중치 추정</h3>
-                <div className="flex-1 min-h-[120px]">
+              <div className="bg-[#131722] border border-white/10 rounded-2xl p-5 flex flex-col shadow-xl">
+                <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+                  <h3 className="text-xs uppercase tracking-wider font-bold text-white flex items-center gap-2">
+                    <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                    투수 연봉 가중치 추정
+                  </h3>
+                  <span className="text-[10px] font-mono text-emerald-400 px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30">WAR / ERA+ 중심</span>
+                </div>
+                <div className="flex-1 min-h-[130px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={analysisResult.stat_weights.pitcher} layout="vertical" margin={{ top: 0, right: 30, left: 10, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="rgba(255,255,255,0.05)" />
                       <XAxis type="number" hide />
-                      <YAxis dataKey="stat" type="category" stroke="#9ca3af" tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 'bold' }} width={60} axisLine={false} tickLine={false} />
-                      <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ backgroundColor: '#111318', borderColor: 'rgba(255,255,255,0.1)', borderRadius: '8px' }} />
-                      <Bar dataKey="weight" radius={[0, 4, 4, 0]} barSize={24}>
-                        {analysisResult.stat_weights.pitcher.map((entry, index) => (
-                          <Cell key={index} fill={index === 0 ? '#d4af37' : '#10b981'} />
+                      <YAxis dataKey="stat" type="category" stroke="#9ca3af" tick={{ fill: '#e5e7eb', fontSize: 12, fontWeight: 'bold' }} width={60} axisLine={false} tickLine={false} />
+                      <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ backgroundColor: '#131722', borderColor: 'rgba(255,255,255,0.15)', borderRadius: '10px', color: '#fff' }} />
+                      <Bar dataKey="weight" radius={[0, 6, 6, 0]} barSize={24}>
+                        {analysisResult.stat_weights.pitcher.map((_, index) => (
+                          <Cell key={index} fill={index === 0 ? '#10B981' : 'rgba(16,185,129,0.5)'} />
                         ))}
                       </Bar>
                     </BarChart>
@@ -845,25 +1291,27 @@ export default function ReverseEngineering() {
             </div>
 
             {/* 중단: 연봉-성적 기준선 (Scatter) */}
-            <div className="min-h-[350px] bg-black/40 border border-white/5 rounded-2xl p-5 flex flex-col relative overflow-hidden">
-              <div className="absolute top-5 right-5 text-xs text-gray-500 flex gap-4">
-                <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-400"></span>Overpay</div>
-                <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-400"></span>Underpay</div>
+            <div className="min-h-[350px] bg-[#131722] border border-white/10 rounded-2xl p-5 md:p-6 flex flex-col relative overflow-hidden shadow-xl">
+              <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-gold" />
+                  {selectedTeam.name} 연봉-WAR 기준선 (Trend Line)
+                </h3>
+                <div className="text-xs text-gray-400 flex items-center gap-4">
+                  <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-400"></span>Overpay (고평가)</div>
+                  <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-blue-400"></span>Underpay (저평가)</div>
+                </div>
               </div>
-              <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-gold" />
-                {selectedTeam.name} 연봉-WAR 기준선 (Trend Line)
-              </h3>
-              <div className="flex-1 min-h-0 mt-4">
+              <div className="flex-1 min-h-[260px] mt-2">
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={scatterData} margin={{ top: 10, right: 20, bottom: 0, left: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                    <XAxis type="number" dataKey="war" name="WAR" stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 12 }} domain={['dataMin - 1', 'dataMax + 1']} />
-                    <YAxis type="number" dataKey="salary" name="Salary" tickFormatter={formatCurrency} stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 12 }} />
+                    <XAxis type="number" dataKey="war" name="WAR" stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} domain={['dataMin - 1', 'dataMax + 1']} />
+                    <YAxis type="number" dataKey="salary" name="Salary" tickFormatter={formatCurrency} stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 11 }} />
                     <Tooltip 
                       cursor={{ strokeDasharray: '3 3' }}
                       formatter={(val: number, name: string) => name === 'Salary' ? [formatCurrency(val), '연봉'] : [val, name]}
-                      contentStyle={{ backgroundColor: '#111318', borderColor: 'rgba(255,255,255,0.1)', color: '#fff' }}
+                      contentStyle={{ backgroundColor: '#131722', borderColor: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: '12px', fontSize: '12px' }} 
                     />
                     <Scatter name="선수" data={scatterData} fill="#8884d8" onClick={handleScatterClick} style={{ cursor: 'pointer' }}>
                       {scatterData.map((entry, index) => {
@@ -872,40 +1320,42 @@ export default function ReverseEngineering() {
                         return <Cell key={`cell-${index}`} fill={color} />;
                       })}
                     </Scatter>
-                    <Line type="monotone" dataKey="salary" stroke="#d4af37" strokeWidth={2} dot={false} strokeDasharray="5 5" opacity={0.5} activeDot={false} name="기준선(추정)" />
+                    <Line type="monotone" dataKey="salary" stroke="#E5A93C" strokeWidth={2} dot={false} strokeDasharray="5 5" opacity={0.6} activeDot={false} name="기준선(추정)" />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
             </div>
 
             {/* 하단: 시뮬레이터 & 아웃라이어 */}
-            <div className="min-h-[250px] grid grid-cols-2 gap-6">
+            <div className="min-h-[250px] grid grid-cols-1 lg:grid-cols-2 gap-5">
               {/* 시뮬레이터 */}
-              <div className="bg-black/40 border border-white/5 rounded-2xl p-5 flex flex-col">
-                <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
-                  <Calculator className="w-4 h-4 text-blue-400" />
-                  타 구단 기준 대입 시뮬레이터
-                </h3>
+              <div className="bg-[#131722] border border-white/10 rounded-2xl p-5 md:p-6 flex flex-col shadow-xl">
+                <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Calculator className="w-4 h-4 text-gold" />
+                    타 구단 기준 대입 시뮬레이터
+                  </h3>
+                </div>
                 <div className="flex items-center gap-4 mb-4">
                   <select 
-                    className="bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white flex-1 focus:outline-none focus:border-gold"
+                    className="bg-black/50 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white flex-1 focus:outline-none focus:border-gold cursor-pointer"
                     value={selectedPlayerForSim?.id}
                     onChange={(e) => setSelectedPlayerForSim(players.find(p => p.id === e.target.value) || null)}
                   >
                     {players.filter(p => p.team === selectedTeam.name).map(p => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.team})</option>
+                      <option key={p.id} value={p.id} className="bg-[#131722]">{p.name} ({p.team})</option>
                     ))}
                   </select>
                 </div>
                 {selectedPlayerForSim && (
-                  <div className="flex-1 bg-gradient-to-br from-blue-900/20 to-black/20 rounded-xl p-4 border border-blue-500/20 flex flex-col justify-center items-center relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl"></div>
-                    <div className="text-xs text-blue-300 mb-1">{selectedTeam.name} 기준 가치 환산</div>
-                    <div className="text-3xl font-black text-white tracking-tight">
+                  <div className="flex-1 bg-black/40 rounded-xl p-5 border border-white/10 flex flex-col justify-center items-center relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-gold/5 rounded-full blur-2xl pointer-events-none" />
+                    <div className="text-xs font-bold text-gold mb-1">{selectedTeam.name} 기준 가치 환산</div>
+                    <div className="text-3xl font-black text-white tracking-tight font-mono">
                       {formatCurrency(selectedPlayerForSim.stats[selectedPlayerForSim.stats.length - 1].war * selectedTeam.costPerWar)}
-                      <span className="text-sm text-gray-500 font-normal ml-2 tracking-normal">예상</span>
+                      <span className="text-xs text-gray-400 font-normal ml-2">예상 연봉</span>
                     </div>
-                    <div className="text-xs text-gray-400 mt-2">
+                    <div className="text-xs text-gray-400 mt-2 font-mono">
                       현재 연봉: {formatCurrency(selectedPlayerForSim.salaryCurrent)}
                     </div>
                   </div>
@@ -913,17 +1363,19 @@ export default function ReverseEngineering() {
               </div>
 
               {/* 아웃라이어 분석 리포트 */}
-              <div className="bg-black/40 border border-white/5 rounded-2xl p-5 flex flex-col overflow-hidden">
-                <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-red-400" />
-                  아웃라이어 분석 리포트
-                </h3>
-                <div className="flex-1 overflow-y-auto pr-2 space-y-3">
+              <div className="bg-[#131722] border border-white/10 rounded-2xl p-5 md:p-6 flex flex-col shadow-xl">
+                <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400" />
+                    아웃라이어 분석 리포트
+                  </h3>
+                </div>
+                <div className="flex-1 overflow-y-auto pr-1 space-y-3">
                   {analysisResult.outliers.map((outlier, idx) => (
-                    <div key={idx} className="bg-black/30 border border-white/5 rounded-xl p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="font-bold text-white text-sm">{outlier.name}</div>
-                        <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded-full ${outlier.isOverpaid ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                    <div key={idx} className="bg-black/30 border border-white/5 rounded-xl p-3.5">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="font-bold text-white text-xs">{outlier.name}</div>
+                        <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${outlier.isOverpaid ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'}`}>
                           {outlier.isOverpaid ? 'Overpaid' : 'Underpaid'}
                         </span>
                       </div>
@@ -933,10 +1385,10 @@ export default function ReverseEngineering() {
                     </div>
                   ))}
                   
-                  <div className="bg-gold/10 border border-gold/20 rounded-xl p-3 mt-4">
-                    <div className="text-[11px] uppercase tracking-widest font-bold text-gold mb-1">Overvalued Stat</div>
-                    <div className="text-white text-sm font-bold mb-1">{analysisResult.overvalued_stat.stat}</div>
-                    <p className="text-xs text-gray-300/80 leading-relaxed">
+                  <div className="bg-gold/10 border border-gold/30 rounded-xl p-3.5 mt-3">
+                    <div className="text-[10px] uppercase tracking-wider font-bold text-gold mb-1">Overvalued Stat (가장 높게 평가된 스탯)</div>
+                    <div className="text-white text-xs font-bold mb-1">{analysisResult.overvalued_stat.stat}</div>
+                    <p className="text-xs text-gray-300 leading-relaxed">
                       {analysisResult.overvalued_stat.reason}
                     </p>
                   </div>
@@ -946,93 +1398,105 @@ export default function ReverseEngineering() {
 
           </>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-600 gap-4 min-h-[200px] border-2 border-dashed border-white/5 rounded-2xl">
-            <Sparkles className="w-8 h-8 text-white/10" />
-            <p className="text-sm">상단의 <span className="font-bold text-gold/70">AI 구단 성향 진단 시작</span> 버튼을 눌러 연봉 산정 기준을 역산해보세요.</p>
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-3 min-h-[220px] bg-[#131722] border border-white/10 rounded-2xl p-8 shadow-xl">
+            <div className="w-12 h-12 rounded-2xl bg-gold/10 border border-gold/30 flex items-center justify-center text-gold">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <p className="text-xs text-gray-300">
+              상단의 <span className="font-bold text-gold">[AI 구단 성향 진단 시작]</span> 버튼을 누르면 연봉 산정 기준을 역산합니다.
+            </p>
           </div>
         )}
       </div>
 
       {/* Edit Player Modal */}
       {editingPlayer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-dark-bg border border-white/10 rounded-2xl p-6 flex flex-col max-w-md w-full mx-4 shadow-2xl">
-            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-gold" />
-              선수 정보 수정
-            </h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-[#131722] border border-white/15 rounded-2xl p-6 flex flex-col max-w-md w-full shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-5">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-gold" />
+                선수 정보 수정
+              </h3>
+              <button 
+                onClick={() => setEditingPlayer(null)}
+                className="text-gray-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
             
-            <div className="space-y-4">
+            <div className="space-y-4 text-xs">
               <div>
-                <label className="block text-xs font-bold text-gray-400 mb-1">선수명</label>
+                <label className="block font-bold text-gray-400 mb-1.5 uppercase tracking-wider">선수명</label>
                 <input 
                   type="text" 
                   value={editingPlayer.name}
                   onChange={e => setEditingPlayer({...editingPlayer, name: e.target.value})}
-                  className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gold"
+                  className="w-full bg-black/50 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-gold"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 mb-1">나이</label>
+                  <label className="block font-bold text-gray-400 mb-1.5 uppercase tracking-wider">나이</label>
                   <input 
                     type="number" 
                     value={editingPlayer.age}
                     onChange={e => setEditingPlayer({...editingPlayer, age: parseInt(e.target.value) || 0})}
-                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gold"
+                    className="w-full bg-black/50 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-gold"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 mb-1">포지션</label>
+                  <label className="block font-bold text-gray-400 mb-1.5 uppercase tracking-wider">포지션</label>
                   <input 
                     type="text" 
                     value={editingPlayer.position}
                     onChange={e => setEditingPlayer({...editingPlayer, position: e.target.value})}
-                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gold"
+                    className="w-full bg-black/50 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-gold"
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 mb-1">입단 연도</label>
+                  <label className="block font-bold text-gray-400 mb-1.5 uppercase tracking-wider">입단 연도</label>
                   <input 
                     type="number" 
                     value={editingPlayer.draftYear}
                     onChange={e => setEditingPlayer({...editingPlayer, draftYear: parseInt(e.target.value) || 0})}
-                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gold"
+                    className="w-full bg-black/50 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-gold"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 mb-1">등록일수 (년/일)</label>
+                  <label className="block font-bold text-gray-400 mb-1.5 uppercase tracking-wider">등록일수 (년/일)</label>
                   <input 
                     type="text" 
                     value={editingPlayer.serviceTime}
                     onChange={e => setEditingPlayer({...editingPlayer, serviceTime: e.target.value})}
-                    className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gold"
+                    className="w-full bg-black/50 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-gold"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-400 mb-1">현재 연봉</label>
+                <label className="block font-bold text-gray-400 mb-1.5 uppercase tracking-wider">현재 연봉 (원 단위)</label>
                 <input 
                   type="number" 
                   value={editingPlayer.salaryCurrent}
                   onChange={e => setEditingPlayer({...editingPlayer, salaryCurrent: parseInt(e.target.value) || 0})}
-                  className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gold"
+                  className="w-full bg-black/50 border border-white/15 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-gold font-mono"
                 />
               </div>
             </div>
 
-            <div className="flex justify-end gap-3 mt-6">
+            <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-white/10">
               <button 
                 onClick={() => setEditingPlayer(null)}
-                className="px-4 py-2 rounded-lg text-sm font-bold text-gray-400 hover:text-white transition-colors"
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-gray-400 hover:text-white transition-colors cursor-pointer"
               >
                 취소
               </button>
               <button 
                 onClick={() => handleSavePlayer(editingPlayer)}
-                className="px-4 py-2 rounded-lg text-sm font-bold bg-gold/20 text-gold hover:bg-gold/30 transition-colors"
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-gold to-amber-500 hover:from-amber-400 hover:to-gold text-black transition-all shadow-md shadow-gold/20 cursor-pointer"
               >
                 저장
               </button>

@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, User, Calculator, TrendingUp, SearchCode } from "lucide-react";
+import { LayoutDashboard, Users, User, Calculator, SearchCode, Shield, Zap } from "lucide-react";
 import clsx from "clsx";
 
 export default function Sidebar() {
@@ -14,17 +14,28 @@ export default function Sidebar() {
   ];
 
   return (
-    <div className="w-[30%] min-w-[280px] max-w-[320px] bg-dark-aside border-r border-white/5 flex flex-col">
-      <div className="p-6 border-b border-white/5">
-        <h1 className="text-[14px] tracking-widest font-semibold text-gray-500 uppercase mb-1">KBO 연봉계산기</h1>
-        <div className="text-xl font-bold flex items-center gap-2">
-          <span className="w-3 h-3 bg-gold rounded-full"></span>
-          <span className="font-sans italic tracking-tight text-white">NOWIWON MANAGEMENT GROUP</span>
+    <div className="w-[30%] min-w-[280px] max-w-[320px] bg-[#0E111A] border-r border-white/10 flex flex-col shadow-2xl relative z-20 select-none">
+      {/* 로고 영역 */}
+      <div className="p-6 border-b border-white/10 bg-black/20">
+        <div className="flex items-center gap-2.5 mb-2">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-gold to-amber-600 flex items-center justify-center text-black font-black shadow-lg shadow-gold/20">
+            <Zap className="w-4 h-4 fill-black text-black" />
+          </div>
+          <div>
+            <h1 className="text-xs tracking-wider font-bold text-gold uppercase">KBO 에이전트 시스템</h1>
+            <div className="text-sm font-black tracking-tight text-white font-sans">
+              NOWIWON SPORTS
+            </div>
+          </div>
         </div>
+        <p className="text-xs text-gray-400 font-medium">데이터 기반 연봉 협상 및 전력 분석</p>
       </div>
       
-      <div className="flex flex-col flex-1 mt-4">
-        <div className="px-6 py-2 text-[14px] uppercase tracking-widest text-gray-600 font-bold mb-2">메인 메뉴</div>
+      {/* 메인 메뉴 네비게이션 */}
+      <div className="flex flex-col flex-1 py-4 px-3 space-y-1">
+        <div className="px-3 py-2 text-xs uppercase tracking-wider text-gray-400 font-bold">
+          메인 메뉴
+        </div>
         {links.map((link) => {
           const Icon = link.icon;
           const isActive = location.pathname === link.path;
@@ -33,28 +44,50 @@ export default function Sidebar() {
               key={link.path}
               to={link.path}
               className={clsx(
-                "flex items-center gap-3 px-6 py-3 text-sm transition-colors",
+                "flex items-center gap-3.5 px-3.5 py-3 rounded-xl text-xs font-semibold transition-all group",
                 isActive 
-                  ? "bg-gold/10 text-white border-l-4 border-gold" 
-                  : "text-gray-400 hover:text-white border-l-4 border-transparent"
+                  ? "bg-gold/15 text-white border border-gold/30 shadow-md shadow-gold/10 font-bold" 
+                  : "text-gray-300 hover:text-white hover:bg-white/5 border border-transparent"
               )}
             >
-              <Icon className={clsx("w-4 h-4", isActive ? "text-gold" : "text-gray-500")} />
-              {link.name}
+              <div className={clsx(
+                "w-7 h-7 rounded-lg flex items-center justify-center transition-colors",
+                isActive ? "bg-gold text-black shadow-sm" : "bg-white/5 text-gray-400 group-hover:text-gold group-hover:bg-gold/10"
+              )}>
+                <Icon className="w-3.5 h-3.5 stroke-[2.2]" />
+              </div>
+              <span className="tracking-tight">{link.name}</span>
+              {isActive && (
+                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-gold animate-pulse" />
+              )}
             </Link>
           );
         })}
       </div>
       
-      <div className="p-6 border-t border-white/5 mt-auto">
-        <div className="text-[13px] text-gray-500 mb-2 uppercase tracking-tighter">계정: 수석 에이전트 한</div>
+      {/* 하단 에이전트 프로필 */}
+      <div className="p-4 m-3 rounded-2xl bg-black/40 border border-white/10 mt-auto shadow-inner">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs text-gray-400 font-medium">담당 에이전트</span>
+          <span className="flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+            인증됨
+          </span>
+        </div>
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center text-xs font-bold text-gray-400">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-gray-800 to-gray-700 border border-gold/40 flex items-center justify-center text-xs font-bold text-gold shadow-md">
             AG
           </div>
-          <div className="text-[13px] font-bold text-gray-300">보안 등급 4</div>
+          <div>
+            <div className="text-xs font-bold text-white">수석 에이전트 한</div>
+            <div className="text-xs text-gray-300 flex items-center gap-1 mt-0.5">
+              <Shield className="w-3 h-3 text-gold" />
+              <span>보안 등급 4 (KBO 라이선스)</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+

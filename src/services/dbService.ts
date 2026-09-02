@@ -80,6 +80,57 @@ const ALL_KBO_TEAMS = [
 ];
 
 /**
+ * 도루저지율(CS%) 파서
+ */
+export function parsePlayerCsPercent(rawCs: any): number | undefined {
+  if (rawCs === undefined || rawCs === null || rawCs === "" || rawCs === "-") return undefined;
+  if (typeof rawCs === "number") {
+    if (isNaN(rawCs) || rawCs < 0) return undefined;
+    // 0.354 처럼 0과 1 사이 소수면 35.4%로 변환
+    if (rawCs > 0 && rawCs <= 1) {
+      return Number((rawCs * 100).toFixed(1));
+    }
+    return Number(rawCs.toFixed(1));
+  }
+  const clean = String(rawCs).replace(/%/g, "").trim();
+  if (!clean || clean === "-") return undefined;
+  const num = parseFloat(clean);
+  if (isNaN(num) || num < 0) return undefined;
+  if (num > 0 && num <= 1) {
+    return Number((num * 100).toFixed(1));
+  }
+  return Number(num.toFixed(1));
+}
+
+/**
+ * 임의의 객체에서 CS% (도루저지율) 값을 다양한 키 이름에서 추출
+ */
+export function extractCsFromObject(obj: any): number | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const val =
+    obj["CS%"] ??
+    obj["도루저지율"] ??
+    obj["도루 저지율"] ??
+    obj["도루저지"] ??
+    obj["도루 저지"] ??
+    obj["CS"] ??
+    obj["cs%"] ??
+    obj["cs"] ??
+    obj["cs_percent"] ??
+    obj["csPercent"] ??
+    obj["CS_PCT"] ??
+    obj["도루저지(CS%)"] ??
+    obj["도루저지율(CS%)"] ??
+    obj["도루저지율(%)"] ??
+    obj["CS Rate"] ??
+    obj["csRate"] ??
+    obj["CS_pct"] ??
+    obj["cs_pct"] ??
+    obj["csPercentage"];
+  return parsePlayerCsPercent(val);
+}
+
+/**
  * 타율(AVG) 파서
  */
 export function parsePlayerAvg(rawAvg: any): number | undefined {
@@ -164,6 +215,97 @@ export function extractWarFromObject(obj: any): number {
 }
 
 /**
+ * API 응답 JSON으로부터 선수의 기록 및 history 배열을 추출하여 단일 레코드 목록으로 정규화
+ */
+function extractRecordsFromResponse(j: any, trimmedName: string, targetTeam?: string): {
+  records: DbRawPlayerRecord[];
+  resolvedTeam?: string;
+  resolvedPosition?: string;
+} {
+  const records: DbRawPlayerRecord[] = [];
+  let resolvedTeam: string | undefined = targetTeam;
+  let resolvedPosition: string | undefined;
+
+  const processItem = (item: any) => {
+    if (!item || typeof item !== "object") return;
+    const name = (item.선수명 || item.이름 || item.name || "").trim();
+    
+    // 이름 비교 (이름이 없는 객체면 통과, 있으면 일치 여부 확인)
+    if (name && trimmedName && !name.includes(trimmedName) && !trimmedName.includes(name)) {
+      return;
+    }
+
+    if (item.팀 || item.구단 || item.소속 || item.team) {
+      resolvedTeam = item.팀 || item.구단 || item.소속 || item.team;
+    }
+    if (item.포지션 || item.position) {
+      resolvedPosition = item.포지션 || item.position;
+    }
+
+    // 1. 객체 내부에 `history` 배열이 존재하는 경우 순회하여 연도별 기록 추출
+    if (Array.isArray(item.history)) {
+      item.history.forEach((h: any) => {
+        if (h && typeof h === "object") {
+          records.push({
+            ...h,
+            선수명: h.선수명 || h.이름 || h.name || name || trimmedName,
+            팀: h.팀 || h.구단 || h.team || resolvedTeam,
+            포지션: h.포지션 || h.position || resolvedPosition,
+            "CS%": extractCsFromObject(h) ?? extractCsFromObject(item),
+            OPS: extractOpsFromObject(h) ?? extractOpsFromObject(item),
+            WAR: extractWarFromObject(h) ?? extractWarFromObject(item),
+          });
+        }
+      });
+    }
+
+    // 2. 객체 자체에 연도 또는 스탯 정보가 포함된 경우 레코드로 추가
+    const hasYear = item.연도 !== undefined || item.시즌 !== undefined || item.year !== undefined || item.Year !== undefined;
+    const hasStat = item["CS%"] !== undefined || item["도루저지율"] !== undefined || item.OPS !== undefined || item.WAR !== undefined || item.타율 !== undefined;
+
+    if (hasYear || hasStat) {
+      records.push({
+        ...item,
+        선수명: name || trimmedName,
+        팀: resolvedTeam,
+        포지션: resolvedPosition,
+        "CS%": extractCsFromObject(item),
+        OPS: extractOpsFromObject(item),
+        WAR: extractWarFromObject(item),
+      });
+    }
+  };
+
+  if (Array.isArray(j?.data)) {
+    j.data.forEach(processItem);
+  } else if (j?.data && typeof j.data === "object") {
+    processItem(j.data);
+  } else if (Array.isArray(j)) {
+    j.forEach(processItem);
+  } else if (j && typeof j === "object") {
+    // 만약 루트에 history가 있는 경우
+    if (Array.isArray(j.history)) {
+      j.history.forEach((h: any) => {
+        if (h && typeof h === "object") {
+          records.push({
+            ...h,
+            선수명: h.선수명 || h.이름 || h.name || j.선수명 || j.이름 || j.name || trimmedName,
+            팀: h.팀 || h.구단 || j.팀 || j.구단 || targetTeam,
+            포지션: h.포지션 || j.포지션 || resolvedPosition,
+            "CS%": extractCsFromObject(h) ?? extractCsFromObject(j),
+            OPS: extractOpsFromObject(h) ?? extractOpsFromObject(j),
+            WAR: extractWarFromObject(h) ?? extractWarFromObject(j),
+          });
+        }
+      });
+    }
+    processItem(j);
+  }
+
+  return { records, resolvedTeam, resolvedPosition };
+}
+
+/**
  * 선수의 이름 및 소속 구단을 기준으로 구글 스프레드시트 DB (Stat_Master_DB 및 구단 로스터 시트)에서 성적 및 프로필 조회
  */
 export async function fetchPlayerFromDatabase(playerName: string, teamName?: string): Promise<DbFetchResult> {
@@ -191,6 +333,7 @@ export async function fetchPlayerFromDatabase(playerName: string, teamName?: str
   ];
 
   let rawList: DbRawPlayerRecord[] = [];
+  let foundTeamName = targetTeam;
 
   for (const url of candidateUrls) {
     try {
@@ -198,9 +341,10 @@ export async function fetchPlayerFromDatabase(playerName: string, teamName?: str
       const res = await fetch(url);
       if (res.ok) {
         const j = await res.json();
-        const items: DbRawPlayerRecord[] = Array.isArray(j?.data) ? j.data : (Array.isArray(j) ? j : []);
-        if (items.length > 0) {
-          rawList = items;
+        const extracted = extractRecordsFromResponse(j, trimmedName, targetTeam);
+        if (extracted.records.length > 0) {
+          rawList = extracted.records;
+          if (extracted.resolvedTeam) foundTeamName = extracted.resolvedTeam;
           break;
         }
       }
@@ -221,9 +365,9 @@ export async function fetchPlayerFromDatabase(playerName: string, teamName?: str
         const res = await fetch(`${GAS_DB_URL}?name=${encodeURIComponent(trimmedName)}&team=${encodeURIComponent(t)}&t=${teamTimestamp}`);
         if (!res.ok) return null;
         const j = await res.json();
-        const list: DbRawPlayerRecord[] = Array.isArray(j?.data) ? j.data : (Array.isArray(j) ? j : []);
-        if (list.length > 0) {
-          return { team: t, list };
+        const extracted = extractRecordsFromResponse(j, trimmedName, t);
+        if (extracted.records.length > 0) {
+          return { team: extracted.resolvedTeam || t, list: extracted.records };
         }
         return null;
       } catch {
@@ -235,13 +379,14 @@ export async function fetchPlayerFromDatabase(playerName: string, teamName?: str
     const found = results.find((r) => r !== null && r.list.length > 0);
     if (found) {
       rawList = found.list;
+      foundTeamName = found.team;
     }
   }
 
-  // 응답된 rawList에서 해당 선수와 일치하는 레코드 필터링 (또는 전체 데이터가 그 선수의 결과인 경우)
+  // 응답된 rawList에서 해당 선수와 일치하는 레코드 필터링
   const matchedRecords = rawList.filter((r) => {
     const rName = (r.선수명 || r.이름 || r.name || "").trim();
-    if (!rName) return true; // 선수명 컬럼이 없으면 결과 데이터 전체 사용
+    if (!rName) return true;
     return rName === trimmedName || rName.includes(trimmedName) || trimmedName.includes(rName);
   });
 
@@ -253,7 +398,7 @@ export async function fetchPlayerFromDatabase(playerName: string, teamName?: str
     const d2026 = finalRecords.find((r) => Number(r.연도 || r.시즌 || r.year) === 2026) || null;
 
     const firstRec = finalRecords[0];
-    const resolvedTeam = firstRec.팀 || firstRec.구단 || firstRec.소속 || firstRec.team || targetTeam || "롯데 자이언츠";
+    const resolvedTeam = firstRec.팀 || firstRec.구단 || firstRec.소속 || firstRec.team || foundTeamName || "롯데 자이언츠";
 
     return {
       success: true,
@@ -395,13 +540,14 @@ export function parsePlayerAge(rawAge: any): number {
 
 /**
  * 연봉 필드 파서 (해당되는 값이 없으면 0 반환)
+ * 데이터베이스에는 연봉이 만원 단위 숫자(예: 9500 -> 9,500만원, 40000 -> 4억원, 100000 -> 10억원, 220000 -> 22억원)로 저장되어 있습니다.
  */
 export function parsePlayerSalary(rawSalary: any): number {
   if (rawSalary === undefined || rawSalary === null || rawSalary === "") return 0;
   const num = typeof rawSalary === "number" ? rawSalary : parseFloat(String(rawSalary).replace(/[^0-9.-]/g, ""));
   if (isNaN(num) || num <= 0) return 0;
-  // 10만 이하의 숫자는 만원 단위(예: 9500 -> 9,500만원)로 판단하여 10,000을 곱함
-  if (num < 100000) {
+  // 1억 미만의 숫자는 만원 단위(예: 3000 -> 3천만원, 9500 -> 9,500만원, 40000 -> 4억원, 100000 -> 10억원, 220000 -> 22억원, 300000 -> 30억원)로 판단하여 10,000을 곱함
+  if (num < 100000000) {
     return num * 10000;
   }
   return num;

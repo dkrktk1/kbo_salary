@@ -21,10 +21,7 @@ import {
   X,
   Sparkles,
   Calendar,
-  Clock,
-  ChevronDown,
-  ChevronUp,
-  Sliders
+  Clock
 } from "lucide-react";
 
 interface AddPlayerModalProps {
@@ -682,7 +679,7 @@ export function AddPlayerModal({
                   </span>
                 </div>
                 <p className="text-[11px] text-gray-400 mt-1.5 break-keep-all">
-                  환산액: <span className="text-white font-bold whitespace-nowrap">{formatSalaryPreview(salaryManwon)}</span>
+                  <span className="text-white font-bold whitespace-nowrap">{formatSalaryPreview(salaryManwon)}</span>
                 </p>
               </div>
 
@@ -725,156 +722,7 @@ export function AddPlayerModal({
             </div>
           </div>
 
-          {/* 3. 연도별 3개년 성적(2024, 2025, 2026) 세부 조정 (토글형 아코디언) */}
-          <div className="bg-black/20 rounded-xl border border-white/10 overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setShowYearlyDetails(!showYearlyDetails)}
-              className="w-full p-3.5 flex items-center justify-between text-left hover:bg-white/5 transition-colors cursor-pointer"
-            >
-              <span className="text-xs font-bold text-gray-300 flex items-center gap-2 whitespace-nowrap">
-                <Sliders className="w-3.5 h-3.5 text-gold" />
-                3개년 (2024, 2025, 2026) 성적 및 연봉 세부 설정
-              </span>
-              <span className="text-gray-400">
-                {showYearlyDetails ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              </span>
-            </button>
-
-            {showYearlyDetails && (
-              <div className="p-4 border-t border-white/10 space-y-4 bg-black/40 text-xs">
-                {/* 2024 시즌 */}
-                <div className="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
-                  <div className="font-bold text-gray-300 flex items-center justify-between whitespace-nowrap">
-                    <span>2024 시즌 기록</span>
-                    <span className="text-gray-400 font-mono">2년 전</span>
-                  </div>
-                  <div className="grid grid-cols-5 gap-2 text-center">
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">타율</span>
-                      <input
-                        type="number"
-                        step="0.001"
-                        placeholder="0.000"
-                        value={stat2024.avg === "" ? "" : stat2024.avg}
-                        onChange={(e) => setStat2024({ ...stat2024, avg: e.target.value === "" ? "" : parseFloat(e.target.value) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-white text-xs"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">OPS</span>
-                      <input
-                        type="number"
-                        step="0.001"
-                        placeholder="0.000"
-                        value={stat2024.ops === "" ? "" : stat2024.ops}
-                        onChange={(e) => setStat2024({ ...stat2024, ops: e.target.value === "" ? "" : parseFloat(e.target.value) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-white text-xs"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">홈런</span>
-                      <input
-                        type="number"
-                        placeholder="0"
-                        value={stat2024.hr === "" ? "" : stat2024.hr}
-                        onChange={(e) => setStat2024({ ...stat2024, hr: e.target.value === "" ? "" : parseInt(e.target.value, 10) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-white text-xs"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">WAR</span>
-                      <input
-                        type="number"
-                        step="0.1"
-                        placeholder="0.0"
-                        value={stat2024.war === "" ? "" : stat2024.war}
-                        onChange={(e) => setStat2024({ ...stat2024, war: e.target.value === "" ? "" : parseFloat(e.target.value) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-gold text-xs"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">연봉(만원)</span>
-                      <input
-                        type="number"
-                        step="100"
-                        placeholder="0"
-                        value={stat2024.salaryManwon === "" ? "" : stat2024.salaryManwon}
-                        onChange={(e) => setStat2024({ ...stat2024, salaryManwon: e.target.value === "" ? "" : parseInt(e.target.value, 10) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-white text-xs"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* 2025 시즌 */}
-                <div className="p-3 rounded-lg bg-white/5 border border-white/10 space-y-2">
-                  <div className="font-bold text-gray-300 flex items-center justify-between whitespace-nowrap">
-                    <span>2025 시즌 기록</span>
-                    <span className="text-gray-400 font-mono">전년도</span>
-                  </div>
-                  <div className="grid grid-cols-5 gap-2 text-center">
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">타율</span>
-                      <input
-                        type="number"
-                        step="0.001"
-                        placeholder="0.000"
-                        value={stat2025.avg === "" ? "" : stat2025.avg}
-                        onChange={(e) => setStat2025({ ...stat2025, avg: e.target.value === "" ? "" : parseFloat(e.target.value) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-white text-xs"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">OPS</span>
-                      <input
-                        type="number"
-                        step="0.001"
-                        placeholder="0.000"
-                        value={stat2025.ops === "" ? "" : stat2025.ops}
-                        onChange={(e) => setStat2025({ ...stat2025, ops: e.target.value === "" ? "" : parseFloat(e.target.value) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-white text-xs"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">홈런</span>
-                      <input
-                        type="number"
-                        placeholder="0"
-                        value={stat2025.hr === "" ? "" : stat2025.hr}
-                        onChange={(e) => setStat2025({ ...stat2025, hr: e.target.value === "" ? "" : parseInt(e.target.value, 10) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-white text-xs"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">WAR</span>
-                      <input
-                        type="number"
-                        step="0.1"
-                        placeholder="0.0"
-                        value={stat2025.war === "" ? "" : stat2025.war}
-                        onChange={(e) => setStat2025({ ...stat2025, war: e.target.value === "" ? "" : parseFloat(e.target.value) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-gold text-xs"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block text-[10px] mb-1 whitespace-nowrap">연봉(만원)</span>
-                      <input
-                        type="number"
-                        step="100"
-                        placeholder="0"
-                        value={stat2025.salaryManwon === "" ? "" : stat2025.salaryManwon}
-                        onChange={(e) => setStat2025({ ...stat2025, salaryManwon: e.target.value === "" ? "" : parseInt(e.target.value, 10) })}
-                        className="w-full h-8 bg-black/60 border border-white/20 rounded px-1.5 text-center font-bold text-white text-xs"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 4. 에이전트와의 계약기간 입력 영역 */}
+          {/* 3. 에이전트와의 계약기간 입력 영역 */}
           <div className="bg-[#12151c] p-4 rounded-xl border border-white/10 space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-1">
               <label className="text-xs font-bold text-gold uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap">

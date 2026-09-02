@@ -172,36 +172,40 @@ export default function Home() {
       )}
 
       {/* 헤더 및 컨트롤 버튼 */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-white/10">
         <div>
           <div className="flex items-center gap-2.5">
-            <h2 className="text-2xl font-sans font-bold tracking-tight text-white">대시보드</h2>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-              <Database className="w-3.5 h-3.5" />
-              구글 DB 실시간 연동
-            </span>
+            <div className="w-8 h-8 rounded-xl bg-gold/15 border border-gold/30 flex items-center justify-center text-gold shadow-md shadow-gold/10">
+              <Database className="w-4 h-4" />
+            </div>
+            <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+              KBO 선수단 관리 대시보드
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-gold/15 text-gold border border-gold/30">
+                v2.5 Live
+              </span>
+            </h2>
           </div>
-          <p className="text-[14px] text-gray-400 tracking-tight mt-1">
-            나우아이원 매니지먼트 그룹 소속 선수 프로필 및 실시간 DB 기록 관리
+          <p className="text-xs text-gray-400 mt-1 pl-10.5">
+            Google 스프레드시트 실시간 연동 • 소속 선수 프로필 및 세이버매트릭스 기록 관리
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <button
             onClick={handleSyncAllPlayers}
             disabled={isBatchSyncing || players.length === 0}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 text-sm font-semibold border border-white/10 transition-all cursor-pointer disabled:opacity-50"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white text-xs font-semibold border border-white/10 transition-all cursor-pointer disabled:opacity-50 shadow-sm"
             title="구글 스프레드시트 DB에서 모든 선수 기록 실시간 갱신"
           >
-            <RefreshCw className={`w-4 h-4 ${isBatchSyncing ? "animate-spin text-gold" : "text-gray-400"}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${isBatchSyncing ? "animate-spin text-gold" : "text-gray-400"}`} />
             <span>{isBatchSyncing ? "DB 동기화 중..." : "전체 DB 동기화"}</span>
           </button>
 
           <button
             onClick={() => setIsAddModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gold hover:bg-yellow-400 text-black text-sm font-bold shadow-lg shadow-gold/20 active:scale-95 transition-all cursor-pointer"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-gold to-amber-500 hover:from-amber-400 hover:to-gold text-black text-xs font-bold shadow-lg shadow-gold/20 active:scale-95 transition-all cursor-pointer"
           >
-            <UserPlus className="w-4 h-4 stroke-[2.5]" />
+            <UserPlus className="w-3.5 h-3.5 stroke-[2.5]" />
             <span>선수 추가 (DB 조회/직접입력)</span>
           </button>
         </div>
@@ -209,25 +213,30 @@ export default function Home() {
 
       {/* 상단 통계 카드 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        <div className="glass-card p-5 rounded-xl flex flex-col justify-between">
+        <div className="bg-[#131722] border border-white/10 p-5 rounded-2xl shadow-xl flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-[13px] text-gray-400 uppercase font-bold tracking-wider">소속 선수 및 구단 분포</p>
-              <Users className="w-4 h-4 text-gold" />
+            <div className="flex items-center justify-between pb-2 border-b border-white/10 mb-3">
+              <p className="text-xs text-gray-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-gold" />
+                소속 선수 및 구단 분포
+              </p>
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-gold/15 text-gold border border-gold/30">
+                {players.length}명 등록
+              </span>
             </div>
-            <div className="flex flex-col items-center justify-center py-3 my-1">
-              <p className="text-3xl font-bold tracking-tight text-white">{players.length}명</p>
-              <p className="text-[13px] text-gray-400 mt-0.5">({activeTeamsCount}개 구단)</p>
+            <div className="flex flex-col items-center justify-center py-2 my-1">
+              <p className="text-3xl font-black tracking-tight text-white">{players.length}<span className="text-base font-normal text-gray-400 ml-1">명</span></p>
+              <p className="text-xs text-gray-400 mt-0.5">총 {activeTeamsCount}개 KBO 구단 소속</p>
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5 mt-2 max-h-[140px] overflow-y-auto pr-1">
+          <div className="flex flex-col gap-1.5 mt-2 max-h-[120px] overflow-y-auto pr-1">
             {(Object.entries(teamCounts) as [string, number][])
               .sort((a, b) => b[1] - a[1])
               .map(([team, count]) => (
-                <div key={team} className="flex justify-between items-center text-[12px] bg-white/5 rounded px-2.5 py-1">
-                  <span className="text-gray-300">{team}</span>
-                  <span className={`font-bold ${count >= 3 ? "text-red-400" : "text-gray-400"}`}>
+                <div key={team} className="flex justify-between items-center text-xs bg-black/40 border border-white/5 rounded-lg px-2.5 py-1.5">
+                  <span className="text-gray-300 font-medium">{team}</span>
+                  <span className={`font-bold ${count >= 3 ? "text-amber-400" : "text-gray-400"}`}>
                     {count}명 {count >= 3 && "(한도 도달)"}
                   </span>
                 </div>
@@ -251,27 +260,31 @@ export default function Home() {
           value={avgWar}
           subText="소속 선수 평균 승리 기여도"
           icon={Activity}
-          color="text-blue-400"
+          color="text-gold"
         />
       </div>
 
       {/* 소속 선수 기록/정보 테이블 */}
-      <div className="glass-card rounded-xl p-6 flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h3 className="text-[15px] font-bold uppercase tracking-widest text-gold flex items-center gap-2">
-              <Database className="w-4 h-4 text-gold" />
-              소속 선수 기록 / 정보 관리
-            </h3>
-            <span className="px-2 py-0.5 rounded-full bg-gold/15 border border-gold/30 text-gold text-xs font-bold">
-              총 {players.length}명
-            </span>
+      <div className="bg-[#131722] border border-white/10 rounded-2xl p-5 md:p-6 shadow-xl flex flex-col gap-4">
+        <div className="flex items-center justify-between pb-3 border-b border-white/10">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-gold/15 border border-gold/30 flex items-center justify-center text-gold">
+              <Database className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                소속 선수 기록 및 연봉 관리
+                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gold/15 text-gold border border-gold/30">
+                  {players.length}명
+                </span>
+              </h3>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className="flex items-center gap-1.5 text-xs font-bold text-gold hover:text-yellow-300 transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gold/15 hover:bg-gold/25 border border-gold/30 text-gold text-xs font-bold transition-all cursor-pointer"
             >
               <UserPlus className="w-3.5 h-3.5" />
               <span>새 선수 등록</span>
@@ -279,29 +292,29 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-lg border border-white/5">
-          <table className="w-full text-sm text-left">
-            <thead className="text-[12.5px] text-center text-gray-400 uppercase tracking-widest bg-white/5 border-b border-white/10">
+        <div className="overflow-x-auto rounded-xl border border-white/10 bg-black/30">
+          <table className="w-full text-xs text-left">
+            <thead className="text-[11.5px] text-center text-gray-400 uppercase tracking-wider bg-black/50 border-b border-white/10 font-bold">
               <tr>
-                <th className="px-4 py-3.5 rounded-tl-lg font-bold text-left pl-6">선수명</th>
+                <th className="px-4 py-3.5 font-bold text-left pl-6">선수명</th>
                 <th className="px-3 py-3.5 font-bold">구단</th>
                 <th className="px-3 py-3.5 font-bold">포지션</th>
                 <th className="px-3 py-3.5 font-bold">나이</th>
-                <th className="px-3 py-3.5 font-bold text-white">타율</th>
-                <th className="px-3 py-3.5 font-bold text-white">OPS</th>
-                <th className="px-3 py-3.5 font-bold text-white">홈런</th>
+                <th className="px-3 py-3.5 font-bold text-gray-200">타율</th>
+                <th className="px-3 py-3.5 font-bold text-gray-200">OPS</th>
+                <th className="px-3 py-3.5 font-bold text-gray-200">홈런</th>
                 <th className="px-3 py-3.5 font-bold text-gold">최근 WAR</th>
-                <th className="px-4 py-3.5 font-bold">현재 연봉</th>
+                <th className="px-4 py-3.5 font-bold text-white">현재 연봉</th>
                 <th className="px-4 py-3.5 font-bold text-gray-300">
                   <div className="flex items-center justify-center gap-1">
-                    <Calendar className="w-3.5 h-3.5 text-gold" />
+                    <Calendar className="w-3 h-3 text-gold" />
                     <span>에이전트 계약기간</span>
                   </div>
                 </th>
-                <th className="px-4 py-3.5 rounded-tr-lg font-bold">관리</th>
+                <th className="px-4 py-3.5 font-bold text-gray-400">관리</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-white/5">
               {players.map((player) => {
                 const latestStat = player.stats?.[player.stats.length - 1];
                 const war = latestStat?.war ?? 0;
@@ -314,38 +327,38 @@ export default function Home() {
                 return (
                   <tr
                     key={player.id}
-                    className="border-b border-white/5 hover:bg-white/5 transition-colors text-center text-[13px] font-sans group"
+                    className="hover:bg-white/5 transition-colors text-center text-xs font-sans group"
                   >
                     <td className="px-4 py-3.5 font-semibold text-white text-left pl-6">
                       <div className="flex items-center gap-3">
-                        <div className="w-7 h-7 rounded-full bg-gray-800 border border-gold/30 text-gold text-xs font-black flex items-center justify-center">
+                        <div className="w-8 h-8 rounded-xl bg-gold/15 border border-gold/30 text-gold text-xs font-black flex items-center justify-center shadow-sm">
                           {player.name.charAt(0)}
                         </div>
                         <div>
-                          <span className="font-bold text-gray-100">{player.name}</span>
-                          <span className="block text-[11px] text-gray-400">입단 {player.draftYear}년</span>
+                          <span className="font-bold text-white text-sm block">{player.name}</span>
+                          <span className="text-xs text-gray-400 font-medium">입단 {player.draftYear}년</span>
                         </div>
                       </div>
                     </td>
                     <td className="px-3 py-3.5">
-                      <span className="px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-gray-300 text-xs font-medium">
+                      <span className="px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-gray-200 text-xs font-semibold">
                         {player.team}
                       </span>
                     </td>
-                    <td className="px-3 py-3.5 text-gray-300">{player.position}</td>
-                    <td className="px-3 py-3.5 text-gray-400">{player.age || 24}세</td>
-                    <td className="px-3 py-3.5 text-white font-mono font-semibold">{avg}</td>
-                    <td className="px-3 py-3.5 text-white font-mono font-semibold">{ops}</td>
-                    <td className="px-3 py-3.5 text-white font-mono font-semibold">{hr}</td>
-                    <td className="px-3 py-3.5 text-gold font-bold text-[14px]">
+                    <td className="px-3 py-3.5 text-gray-200 font-semibold text-xs">{player.position}</td>
+                    <td className="px-3 py-3.5 text-gray-300 font-medium text-xs">{player.age || 24}세</td>
+                    <td className="px-3 py-3.5 text-white font-bold text-xs tracking-wide">{avg}</td>
+                    <td className="px-3 py-3.5 text-white font-bold text-xs tracking-wide">{ops}</td>
+                    <td className="px-3 py-3.5 text-white font-bold text-xs tracking-wide">{hr}</td>
+                    <td className="px-3 py-3.5 text-gold font-bold text-sm">
                       {war.toFixed(1)}
                     </td>
-                    <td className="px-4 py-3.5 text-gray-200 font-semibold">
+                    <td className="px-4 py-3.5 text-emerald-400 font-bold text-xs">
                       {formatSalaryText(player.salaryCurrent)}
                     </td>
                     <td className="px-4 py-3.5">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-black/40 border border-white/10 text-xs font-mono text-gray-300">
-                        <Clock className="w-3 h-3 text-gold opacity-75" />
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-xs font-medium text-gray-200">
+                        <Clock className="w-3.5 h-3.5 text-gold opacity-90" />
                         {period}
                       </span>
                     </td>
@@ -353,7 +366,7 @@ export default function Home() {
                       <div className="flex items-center justify-center gap-1.5">
                         <button
                           onClick={() => setEditingPlayer(player)}
-                          className="px-2 py-1 rounded bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-xs font-medium transition-all flex items-center gap-1 cursor-pointer"
+                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer"
                           title="선수 정보 및 성적 수정"
                         >
                           <Pencil className="w-3 h-3 text-gold" />
@@ -362,7 +375,7 @@ export default function Home() {
                         <button
                           onClick={() => handleSyncSinglePlayer(player)}
                           disabled={isSyncingThis}
-                          className="px-2 py-1 rounded bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-xs font-medium transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          className="px-2 py-1 rounded-lg bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
                           title="구글 스프레드시트 DB에서 최신 기록 동기화"
                         >
                           <RefreshCw className={`w-3 h-3 ${isSyncingThis ? "animate-spin text-gold" : ""}`} />
@@ -373,7 +386,7 @@ export default function Home() {
                           className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all cursor-pointer"
                           title="선수 삭제"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </td>
@@ -388,7 +401,7 @@ export default function Home() {
                     <p className="text-sm font-semibold mb-2">등록된 선수가 없습니다.</p>
                     <button
                       onClick={() => setIsAddModalOpen(true)}
-                      className="px-4 py-1.5 rounded bg-gold text-black text-xs font-bold hover:bg-yellow-400 cursor-pointer"
+                      className="px-4 py-2 rounded-xl bg-gradient-to-r from-gold to-amber-500 text-black text-xs font-bold shadow-md hover:from-amber-400 hover:to-gold cursor-pointer"
                     >
                       첫 번째 선수 추가하기
                     </button>
@@ -441,17 +454,19 @@ function StatCard({
   color: string;
 }) {
   return (
-    <div className="glass-card p-5 rounded-xl flex flex-col justify-between">
+    <div className="bg-[#131722] border border-white/10 p-5 rounded-2xl shadow-xl flex flex-col justify-between">
       <div>
-        <div className="flex items-center justify-between mb-2">
-          <p className="text-[13px] text-gray-400 uppercase font-bold tracking-wider">{title}</p>
-          <Icon className={`w-4 h-4 ${color}`} />
+        <div className="flex items-center justify-between pb-2 border-b border-white/10 mb-3">
+          <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">{title}</p>
+          <div className="w-6 h-6 rounded-lg bg-black/40 border border-white/10 flex items-center justify-center">
+            <Icon className={`w-3.5 h-3.5 ${color}`} />
+          </div>
         </div>
-        <div className="flex flex-col items-center justify-center py-3 my-1">
-          <p className="text-3xl font-bold tracking-tight text-white">{value}</p>
+        <div className="flex flex-col items-center justify-center py-4 my-1">
+          <p className="text-3xl font-black tracking-tight text-white">{value}</p>
         </div>
       </div>
-      {subText && <p className="text-xs text-gray-400 text-center mt-3 pt-2 border-t border-white/5">{subText}</p>}
+      {subText && <p className="text-xs text-gray-400 text-center mt-2 pt-2 border-t border-white/5">{subText}</p>}
     </div>
   );
 }

@@ -95,124 +95,176 @@ export default function Simulator() {
   }
 
   return (
-    <div className="p-8 h-full overflow-y-auto bg-dark-main text-gray-200 flex flex-col gap-6">
-      <div className="mb-2">
-        <h2 className="text-2xl font-sans font-bold tracking-tight text-white">목표-연봉 시뮬레이터</h2>
-        <p className="text-[14px] text-gray-400 uppercase tracking-widest mt-1">목표 스탯 기반 예상 연봉 및 협상 논리</p>
+    <div className="p-6 md:p-8 h-full overflow-y-auto bg-dark-main text-gray-200 flex flex-col gap-6">
+      {/* 헤더 */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-white/10">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-gold/15 border border-gold/30 flex items-center justify-center text-gold shadow-md shadow-gold/10">
+              <Calculator className="w-4 h-4" />
+            </div>
+            <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+              목표-연봉 시뮬레이터
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-gold/15 text-gold border border-gold/30">
+                AI 시나리오 모델링
+              </span>
+            </h2>
+          </div>
+          <p className="text-xs text-gray-400 mt-1 pl-10.5">
+            목표 스탯(WAR, 홈런, 타율) 설정에 따른 예상 연봉 Range 및 구단 연봉 협상 논리 생성
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* 좌측: 목표 스탯 입력 패널 */}
-        <div className="glass-card rounded-xl p-6 flex flex-col h-full">
-          <div className="flex items-center gap-2 mb-6">
-            <Target className="w-5 h-5 text-gold" />
-            <h3 className="text-[16px] uppercase font-bold text-white tracking-widest">목표 스탯 입력 패널</h3>
-          </div>
-
-          <div className="mb-6">
-            <label className="block text-[14px] uppercase font-bold text-gray-500 mb-2 tracking-widest">선수 선택</label>
-            <select 
-              className="w-full bg-black/40 border border-white/10 text-white text-sm rounded focus:ring-gold focus:border-gold block p-2.5 font-sans outline-none"
-              value={selectedPlayerId}
-              onChange={(e) => {
-                setSelectedPlayerId(e.target.value);
-                setReport("");
-              }}
-            >
-              {players.map(p => <option key={p.id} value={p.id} className="bg-dark-aside">{p.name} ({p.team})</option>)}
-            </select>
-          </div>
-
-          <div className="flex-1 flex flex-col gap-6">
-            <div>
-              <div className="flex justify-between mb-1">
-                <label className="text-[14px] font-bold text-gray-300">목표 WAR (대체 선수 대비 승리기여도)</label>
-                <span className="text-[14px] text-gold font-bold">{targetWar.toFixed(1)}</span>
-              </div>
-              <input 
-                type="range" min="0" max="10" step="0.1"
-                value={targetWar}
-                onChange={(e) => setTargetWar(parseFloat(e.target.value))}
-                className="w-full accent-gold h-2 bg-black/50 rounded-lg appearance-none cursor-pointer"
-              />
+        <div className="bg-[#131722] border border-white/10 rounded-2xl p-6 shadow-xl flex flex-col h-full justify-between">
+          <div>
+            <div className="flex items-center gap-2 pb-3 border-b border-white/10 mb-5">
+              <Target className="w-4 h-4 text-gold" />
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">목표 스탯 파라미터 설정</h3>
             </div>
 
-            <div>
-              <div className="flex justify-between mb-1">
-                <label className="text-[14px] font-bold text-gray-300">목표 홈런 (HR)</label>
-                <span className="text-[14px] text-gold font-bold">{targetHr}개</span>
-              </div>
-              <input 
-                type="range" min="0" max="50" step="1"
-                value={targetHr}
-                onChange={(e) => setTargetHr(parseInt(e.target.value))}
-                className="w-full accent-gold h-2 bg-black/50 rounded-lg appearance-none cursor-pointer"
-              />
+            <div className="mb-5">
+              <label className="block text-xs font-bold text-gray-400 mb-2 uppercase tracking-wider">대상 선수 선택</label>
+              <select 
+                className="w-full bg-black/50 border border-white/15 text-white text-xs rounded-xl focus:ring-1 focus:ring-gold focus:border-gold block p-3 font-sans outline-none transition-all cursor-pointer"
+                value={selectedPlayerId}
+                onChange={(e) => {
+                  setSelectedPlayerId(e.target.value);
+                  setReport("");
+                }}
+              >
+                {players.map(p => <option key={p.id} value={p.id} className="bg-[#131722] text-white">{p.name} ({p.team} • {p.position})</option>)}
+              </select>
             </div>
 
-            <div>
-              <div className="flex justify-between mb-1">
-                <label className="text-[14px] font-bold text-gray-300">목표 타율 (AVG)</label>
-                <span className="text-[14px] text-gold font-bold">{targetAvg.toFixed(3)}</span>
+            <div className="flex flex-col gap-5 bg-black/30 p-4 rounded-xl border border-white/5">
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-xs font-bold text-gray-200">목표 WAR (승리기여도)</label>
+                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-gold/15 text-gold border border-gold/30">
+                    {targetWar.toFixed(1)} WAR
+                  </span>
+                </div>
+                <input 
+                  type="range" min="0" max="10" step="0.1"
+                  value={targetWar}
+                  onChange={(e) => setTargetWar(parseFloat(e.target.value))}
+                  className="w-full accent-gold h-2.5 bg-black/60 rounded-lg appearance-none cursor-pointer"
+                />
+                <div className="flex justify-between text-[11px] text-gray-400 font-medium mt-1.5 px-0.5">
+                  <span>0.0</span>
+                  <span>5.0 (올스타)</span>
+                  <span>10.0 (MVP)</span>
+                </div>
               </div>
-              <input 
-                type="range" min="0.200" max="0.380" step="0.001"
-                value={targetAvg}
-                onChange={(e) => setTargetAvg(parseFloat(e.target.value))}
-                className="w-full accent-gold h-2 bg-black/50 rounded-lg appearance-none cursor-pointer"
-              />
+
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-xs font-bold text-gray-200">목표 홈런 (HR)</label>
+                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-gold/15 text-gold border border-gold/30">
+                    {targetHr}개
+                  </span>
+                </div>
+                <input 
+                  type="range" min="0" max="50" step="1"
+                  value={targetHr}
+                  onChange={(e) => setTargetHr(parseInt(e.target.value))}
+                  className="w-full accent-gold h-2.5 bg-black/60 rounded-lg appearance-none cursor-pointer"
+                />
+                <div className="flex justify-between text-[11px] text-gray-400 font-medium mt-1.5 px-0.5">
+                  <span>0개</span>
+                  <span>25개 (중장거리)</span>
+                  <span>50개 (거포)</span>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="text-xs font-bold text-gray-200">목표 타율 (AVG)</label>
+                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-gold/15 text-gold border border-gold/30">
+                    {targetAvg.toFixed(3)}
+                  </span>
+                </div>
+                <input 
+                  type="range" min="0.200" max="0.380" step="0.001"
+                  value={targetAvg}
+                  onChange={(e) => setTargetAvg(parseFloat(e.target.value))}
+                  className="w-full accent-gold h-2.5 bg-black/60 rounded-lg appearance-none cursor-pointer"
+                />
+                <div className="flex justify-between text-[11px] text-gray-400 font-medium mt-1.5 px-0.5">
+                  <span>0.200</span>
+                  <span>0.290 (리그평균)</span>
+                  <span>0.380 (수위타자)</span>
+                </div>
+              </div>
             </div>
           </div>
 
           <button 
             onClick={runSimulation}
             disabled={loading}
-            className="w-full bg-gold text-black hover:bg-yellow-500 px-4 py-3 rounded text-[13px] font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-2 mt-8"
+            className="w-full bg-gradient-to-r from-gold to-amber-500 hover:from-amber-400 hover:to-gold text-black px-4 py-3 rounded-xl text-xs font-bold transition-all shadow-lg shadow-gold/20 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2 mt-6 cursor-pointer"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />}
-            {loading ? "AI 분석 중..." : "AI 협상 논리 생성"}
+            {loading ? <Loader2 className="w-4 h-4 animate-spin text-black" /> : <Sparkles className="w-4 h-4 stroke-[2.5]" />}
+            <span>{loading ? "AI 시나리오 분석 중..." : "AI 협상 논리 시뮬레이션"}</span>
           </button>
         </div>
 
         <div className="col-span-1 lg:col-span-2 flex flex-col gap-6">
           {/* 우측 상단: 예상 연봉 결과 */}
-          <div className="glass-card rounded-xl p-8 flex flex-col items-center justify-center text-center relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-gold/10 rounded-bl-[100px] z-0"></div>
-            <h3 className="text-[14px] uppercase font-bold text-gray-500 tracking-widest mb-2 z-10">AI 예상 연봉 Range (최소 ~ 최대)</h3>
-            <div className="flex items-end justify-center gap-2 z-10">
-              <span className="text-[40px] font-extrabold text-white font-sans tracking-tighter">
+          <div className="bg-[#131722] border border-white/10 rounded-2xl p-6 md:p-8 shadow-xl flex flex-col items-center justify-center text-center relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-40 h-40 bg-gold/5 rounded-bl-full pointer-events-none" />
+            <div className="flex items-center gap-1.5 mb-2">
+              <Sparkles className="w-3.5 h-3.5 text-gold" />
+              <h3 className="text-xs font-bold uppercase text-gray-400 tracking-wider">AI 시뮬레이션 예상 연봉 범위</h3>
+            </div>
+            
+            <div className="flex items-baseline justify-center gap-3 my-2">
+              <span className="text-3xl md:text-4xl font-black text-white font-mono tracking-tight">
                 ₩{(minEstimate / 100000000).toFixed(1)}억
               </span>
-              <span className="text-2xl text-gray-500 pb-1">~</span>
-              <span className="text-[40px] font-extrabold text-gold font-sans tracking-tighter">
+              <span className="text-xl text-gray-500 font-bold">~</span>
+              <span className="text-3xl md:text-4xl font-black text-gold font-mono tracking-tight">
                 ₩{(maxEstimate / 100000000).toFixed(1)}억
               </span>
             </div>
-            <p className="text-[13px] text-gray-400 mt-4 z-10">
-              현재 연봉: ₩{(currentSalary / 100000000).toFixed(1)}억 (
-              <span className="text-green-400 ml-1">
-                +₩{((maxEstimate - currentSalary) / 100000000).toFixed(1)}억 인상 가능
-              </span>)
-            </p>
+            
+            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-white/10 text-xs text-gray-400 font-mono">
+              <span>현재 연봉: ₩{(currentSalary / 100000000).toFixed(1)}억</span>
+              <span className="text-gray-600">•</span>
+              <span className="text-emerald-400 font-bold">
+                최대 +₩{((maxEstimate - currentSalary) / 100000000).toFixed(1)}억 인상 타당성 확보
+              </span>
+            </div>
           </div>
 
           {/* 우측 하단: AI 협상 논리 */}
-          <div className="glass-card rounded-xl p-6 flex-1 flex flex-col">
-            <h3 className="text-[14px] font-bold uppercase tracking-widest text-gold flex items-center gap-2 mb-4">
-              <TrendingUp className="w-4 h-4 text-gold" />
-              AI 핵심 협상 논리 (Negotiation Points)
-            </h3>
+          <div className="bg-[#131722] border border-white/10 rounded-2xl p-6 shadow-xl flex-1 flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-gold" />
+                AI 핵심 협상 브리핑 (Negotiation Logic)
+              </h3>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-gold/15 text-gold border border-gold/30">
+                구단 협상 테이블용
+              </span>
+            </div>
             
-            <div className="bg-black/20 rounded border border-white/5 p-6 flex-1 h-full min-h-[250px]">
+            <div className="bg-black/30 rounded-xl border border-white/5 p-5 flex-1 min-h-[220px]">
               {report ? (
-                <div className="prose prose-sm prose-invert max-w-none font-sans text-gray-200">
-                  <div className="whitespace-pre-wrap leading-relaxed">{report}</div>
+                <div className="prose prose-sm prose-invert max-w-none font-sans text-gray-200 text-xs leading-relaxed space-y-2">
+                  <div className="whitespace-pre-wrap">{report}</div>
                 </div>
               ) : (
-                <div className="h-full flex flex-col items-center justify-center text-gray-600 gap-3">
-                  <Calculator className="w-10 h-10 opacity-20" />
-                  <p className="text-xs uppercase tracking-widest text-center max-w-sm">
-                    좌측에서 목표 스탯을 설정한 뒤,<br/>하단 버튼을 눌러 협상 논리를 생성하세요
+                <div className="h-full flex flex-col items-center justify-center text-gray-500 gap-3 py-8">
+                  <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center">
+                    <Calculator className="w-5 h-5 text-gray-500" />
+                  </div>
+                  <p className="text-xs text-center text-gray-400 max-w-xs leading-relaxed">
+                    좌측 패널에서 목표 스탯을 설정한 후,<br/>
+                    <span className="text-gold font-bold">[AI 협상 논리 시뮬레이션]</span> 버튼을 누르면 브리핑이 생성됩니다.
                   </p>
                 </div>
               )}
