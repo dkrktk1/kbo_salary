@@ -57,10 +57,12 @@ const getStoredTendencyData = (): Record<string, DbTeamPlayer[]> | null => {
       const normalized: Record<string, DbTeamPlayer[]> = {};
       Object.entries(data).forEach(([teamName, list]) => {
         if (Array.isArray(list)) {
-          normalized[teamName] = list.map((p) => ({
-            ...p,
-            salary: parsePlayerSalary(p.salary)
-          }));
+          normalized[teamName] = list
+            .map((p) => ({
+              ...p,
+              salary: parsePlayerSalary(p.salary)
+            }))
+            .filter((p) => typeof p.salary === 'number' && p.salary > 0);
         }
       });
       return normalized;
@@ -154,9 +156,9 @@ export default function ReverseEngineering() {
     }
   };
 
-  // 정렬 및 필터 적용된 로스터 목록
+  // 정렬 및 필터 적용된 로스터 목록 (연봉 정보가 있는 선수만 반영)
   const displayedRoster = useMemo(() => {
-    let list = [...teamRoster];
+    let list = teamRoster.filter((p) => typeof p.salary === 'number' && p.salary > 0);
 
     // 필터 조건 적용
     if (filterCategory !== 'ALL') {
@@ -700,18 +702,21 @@ export default function ReverseEngineering() {
     }
   };
 
-  // Scatter plot data mapping
-  const scatterData = teamRoster.length > 0
-    ? teamRoster.map(p => ({
-        name: p.name,
-        war: p.war,
-        salary: p.salary
-      }))
+  // Scatter plot data mapping (연봉 정보가 있는 선수만 반영)
+  const scatterData = (teamRoster.length > 0
+    ? teamRoster
     : players.filter(p => p.team === selectedTeam.name).map(p => ({
         name: p.name,
         war: p.stats[p.stats.length - 1]?.war ?? 0,
         salary: p.salaryCurrent
-      }));
+      }))
+    )
+    .filter(p => typeof p.salary === 'number' && p.salary > 0)
+    .map(p => ({
+      name: p.name,
+      war: p.war,
+      salary: p.salary
+    }));
 
   const handleScatterClick = (data: any) => {
     if (data && data.name) {
@@ -779,14 +784,14 @@ export default function ReverseEngineering() {
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <div className={`font-bold text-sm ${isSelected ? 'text-gold' : 'text-white'}`}>{team.name}</div>
+                  <div className={`font-bold text-[16px] ${isSelected ? 'text-gold' : 'text-white'}`}>{team.name}</div>
                   {isSelected && (
                     <span className="w-2 h-2 rounded-full bg-gold animate-pulse" />
                   )}
                 </div>
-                <div className="text-[11px] mt-1 font-medium flex items-center justify-between">
-                  <span className="text-gray-500">총 연봉:</span>
-                  <span className={`font-mono font-bold ${isSelected ? 'text-gold' : 'text-gray-300'}`}>
+                <div className="text-[12px] mt-1 font-medium flex items-center justify-between">
+                  <span className="text-white text-[12px]">총 연봉:</span>
+                  <span className={`font-mono font-bold text-[12px] ${isSelected ? 'text-gold' : 'text-gray-300'}`}>
                     {team.calculatedPayroll > 0 ? formatCurrency(team.calculatedPayroll) : '조회 중...'}
                   </span>
                 </div>
@@ -803,7 +808,7 @@ export default function ReverseEngineering() {
           <div className="p-4 md:p-5 border-b border-white/10 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm md:text-base font-bold text-white flex items-center gap-2">
+                <h3 className="text-[18px] font-bold text-white flex items-center gap-2">
                   <span>{selectedTeam.name}</span> 인터랙티브 로스터
                 </h3>
                 {isDbLoaded ? (
@@ -821,14 +826,14 @@ export default function ReverseEngineering() {
               {/* 제목 영역: 연봉 총합 및 평균 연봉 표시 */}
               <div className="flex items-center gap-2.5 bg-black/40 border border-white/10 px-3 py-1.5 rounded-xl text-xs">
                 <div className="flex items-center gap-1.5 text-gray-300">
-                  <span className="text-gray-400 text-[11px]">총 연봉:</span>
-                  <span className="font-bold font-mono text-gold">{formatCurrency(rosterTotalSalary)}</span>
+                  <span className="text-white text-[14px]">총 연봉:</span>
+                  <span className="font-bold font-mono text-gold text-[14px]">{formatCurrency(rosterTotalSalary)}</span>
                 </div>
                 <span className="text-white/20">|</span>
                 <div className="flex items-center gap-1.5 text-gray-300">
-                  <span className="text-gray-400 text-[11px]">평균:</span>
-                  <span className="font-bold font-mono text-emerald-400">{formatCurrency(rosterAvgSalary)}</span>
-                  <span className="text-[10px] text-gray-400 font-mono">({rosterPlayerCount}명)</span>
+                  <span className="text-white text-[14px]">평균:</span>
+                  <span className="font-bold font-mono text-emerald-400 text-[14px]">{formatCurrency(rosterAvgSalary)}</span>
+                  <span className="text-white text-[14px] font-mono">({rosterPlayerCount}명)</span>
                 </div>
               </div>
             </div>
@@ -838,7 +843,7 @@ export default function ReverseEngineering() {
               <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 rounded-xl p-1 text-xs">
                 <div className="flex items-center gap-1 text-gray-400 pl-1.5">
                   <Filter className="w-3.5 h-3.5 text-gold shrink-0" />
-                  <span className="text-[11px] text-gray-400 font-bold whitespace-nowrap">필터:</span>
+                  <span className="text-[11px] text-white text-center font-bold whitespace-nowrap">필터:</span>
                 </div>
                 
                 <select
@@ -1011,35 +1016,49 @@ export default function ReverseEngineering() {
 
           </div>
           <div className="flex-1 overflow-y-auto max-h-[420px]">
-            <table className="w-full text-center text-xs text-gray-300 border-collapse">
-              <thead className="bg-black/60 text-[11px] uppercase text-gray-400 sticky top-0 z-10 border-b border-white/10 backdrop-blur-md">
+            <table className="w-full text-center text-xs text-gray-300 border-collapse table-fixed">
+              <colgroup>
+                <col className="w-[14%]" />
+                <col className="w-[8%]" />
+                <col className="w-[11%]" />
+                <col className="w-[15%]" />
+                <col className="w-[19%]" />
+                <col className="w-[11%]" />
+                <col className="w-[11%]" />
+                <col className="w-[11%]" />
+              </colgroup>
+              <thead className="bg-[#121620] text-[13px] uppercase text-white sticky top-0 z-10 border-b border-white/10 shadow-sm">
                 <tr>
                   <th 
                     onClick={() => handleSort('name')}
                     className="px-2 py-2.5 font-bold text-center select-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors group whitespace-nowrap"
                     title="선수명 정렬"
                   >
-                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                      <span className={sortField === 'name' ? 'text-gold' : 'text-gray-400 group-hover:text-gray-200'}>선수명</span>
-                      {sortField === 'name' ? (
-                        sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
-                      ) : (
-                        <ArrowUpDown className="w-3 h-3 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                      )}
+                    <div className="inline-flex items-center justify-center relative">
+                      <span className={`text-[13px] ${sortField === 'name' ? 'text-gold' : 'text-white'}`}>선수명</span>
+                      <span className="absolute left-full ml-1 flex items-center">
+                        {sortField === 'name' ? (
+                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        )}
+                      </span>
                     </div>
                   </th>
                   <th 
                     onClick={() => handleSort('age')}
-                    className="px-1.5 py-2.5 font-bold text-center select-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors group whitespace-nowrap"
+                    className="px-2 py-2.5 font-bold text-center select-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors group whitespace-nowrap"
                     title="나이 정렬"
                   >
-                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                      <span className={sortField === 'age' ? 'text-gold' : 'text-gray-400 group-hover:text-gray-200'}>나이</span>
-                      {sortField === 'age' ? (
-                        sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
-                      ) : (
-                        <ArrowUpDown className="w-3 h-3 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                      )}
+                    <div className="inline-flex items-center justify-center relative">
+                      <span className={`text-[13px] ${sortField === 'age' ? 'text-gold' : 'text-white'}`}>나이</span>
+                      <span className="absolute left-full ml-1 flex items-center">
+                        {sortField === 'age' ? (
+                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        )}
+                      </span>
                     </div>
                   </th>
                   <th 
@@ -1047,13 +1066,15 @@ export default function ReverseEngineering() {
                     className="px-2 py-2.5 font-bold text-center select-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors group whitespace-nowrap"
                     title="포지션 정렬"
                   >
-                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                      <span className={sortField === 'position' ? 'text-gold' : 'text-gray-400 group-hover:text-gray-200'}>포지션</span>
-                      {sortField === 'position' ? (
-                        sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
-                      ) : (
-                        <ArrowUpDown className="w-3 h-3 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                      )}
+                    <div className="inline-flex items-center justify-center relative">
+                      <span className={`text-[13px] ${sortField === 'position' ? 'text-gold' : 'text-white'}`}>포지션</span>
+                      <span className="absolute left-full ml-1 flex items-center">
+                        {sortField === 'position' ? (
+                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        )}
+                      </span>
                     </div>
                   </th>
                   <th 
@@ -1061,27 +1082,31 @@ export default function ReverseEngineering() {
                     className="px-2 py-2.5 font-bold text-center select-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors group whitespace-nowrap"
                     title="핵심 스탯(WAR) 정렬"
                   >
-                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                      <span className={sortField === 'war' ? 'text-gold' : 'text-gray-400 group-hover:text-gray-200'}>핵심 스탯(WAR)</span>
-                      {sortField === 'war' ? (
-                        sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
-                      ) : (
-                        <ArrowUpDown className="w-3 h-3 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                      )}
+                    <div className="inline-flex items-center justify-center relative">
+                      <span className={`text-[13px] ${sortField === 'war' ? 'text-gold' : 'text-white'}`}>핵심 스탯(WAR)</span>
+                      <span className="absolute left-full ml-1 flex items-center">
+                        {sortField === 'war' ? (
+                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        )}
+                      </span>
                     </div>
                   </th>
                   <th 
                     onClick={() => handleSort('salary')}
-                    className="px-2.5 py-2.5 font-bold text-center select-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors group whitespace-nowrap"
+                    className="px-2 py-2.5 font-bold text-center select-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors group whitespace-nowrap"
                     title="현재 연봉 정렬"
                   >
-                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                      <span className={sortField === 'salary' ? 'text-gold' : 'text-gray-400 group-hover:text-gray-200'}>현재 연봉</span>
-                      {sortField === 'salary' ? (
-                        sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
-                      ) : (
-                        <ArrowUpDown className="w-3 h-3 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                      )}
+                    <div className="inline-flex items-center justify-center relative">
+                      <span className={`text-[13px] ${sortField === 'salary' ? 'text-gold' : 'text-white'}`}>현재 연봉</span>
+                      <span className="absolute left-full ml-1 flex items-center">
+                        {sortField === 'salary' ? (
+                          sortDirection === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-gold shrink-0 text-[13px]" /> : <ArrowDown className="w-3.5 h-3.5 text-gold shrink-0 text-[13px]" />
+                        ) : (
+                          <ArrowUpDown className="w-3.5 h-3.5 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-[13px]" />
+                        )}
+                      </span>
                     </div>
                   </th>
                   <th 
@@ -1089,13 +1114,15 @@ export default function ReverseEngineering() {
                     className="px-2 py-2.5 font-bold text-center select-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors group whitespace-nowrap"
                     title="입단 연도 정렬"
                   >
-                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                      <span className={sortField === 'draftYear' ? 'text-gold' : 'text-gray-400 group-hover:text-gray-200'}>입단 연도</span>
-                      {sortField === 'draftYear' ? (
-                        sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
-                      ) : (
-                        <ArrowUpDown className="w-3 h-3 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                      )}
+                    <div className="inline-flex items-center justify-center relative">
+                      <span className={`text-[13px] ${sortField === 'draftYear' ? 'text-gold' : 'text-white'}`}>입단 연도</span>
+                      <span className="absolute left-full ml-1 flex items-center">
+                        {sortField === 'draftYear' ? (
+                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        )}
+                      </span>
                     </div>
                   </th>
                   <th 
@@ -1103,16 +1130,18 @@ export default function ReverseEngineering() {
                     className="px-2 py-2.5 font-bold text-center select-none cursor-pointer hover:bg-white/5 hover:text-white transition-colors group whitespace-nowrap"
                     title="등록일수 정렬"
                   >
-                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                      <span className={sortField === 'serviceTime' ? 'text-gold' : 'text-gray-400 group-hover:text-gray-200'}>등록일수</span>
-                      {sortField === 'serviceTime' ? (
-                        sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
-                      ) : (
-                        <ArrowUpDown className="w-3 h-3 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                      )}
+                    <div className="inline-flex items-center justify-center relative">
+                      <span className={`text-[13px] ${sortField === 'serviceTime' ? 'text-gold' : 'text-white'}`}>등록일수</span>
+                      <span className="absolute left-full ml-1 flex items-center">
+                        {sortField === 'serviceTime' ? (
+                          sortDirection === 'asc' ? <ArrowUp className="w-3 h-3 text-gold shrink-0" /> : <ArrowDown className="w-3 h-3 text-gold shrink-0" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        )}
+                      </span>
                     </div>
                   </th>
-                  <th className="px-2 py-2.5 font-bold text-center whitespace-nowrap">관리</th>
+                  <th className="px-2 py-2.5 font-bold text-center whitespace-nowrap text-[13px] text-white">관리</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -1133,10 +1162,10 @@ export default function ReverseEngineering() {
                         <span className="text-xs font-bold text-gray-300">
                           {teamRoster.length > 0 && filterCategory !== 'ALL' && filterQuery !== 'ALL' && filterQuery !== ''
                             ? '선택하신 필터 조건에 부합하는 선수가 없습니다' 
-                            : '해당 구단에 등록된 선수가 없습니다'}
+                            : '해당 구단에 연봉 정보가 등록된 선수가 없습니다'}
                         </span>
                         <p className="text-[11px] text-gray-500">
-                          {rosterError || (teamRoster.length > 0 ? '다른 필터 조건을 선택하거나 필터를 해제해 보세요.' : `'${selectedTeam.name}' 소속 선수가 구글 스프레드시트 DB에 존재하지 않습니다.`)}
+                          {rosterError || (teamRoster.length > 0 ? '다른 필터 조건을 선택하거나 필터를 해제해 보세요.' : `'${selectedTeam.name}' 소속 선수의 연봉 정보가 구글 스프레드시트 DB에 존재하지 않습니다.`)}
                         </p>
                       </div>
                     </td>
@@ -1149,18 +1178,20 @@ export default function ReverseEngineering() {
                     
                     return (
                       <tr 
-                        key={idx}
+                        key={pData.id || `${pData.name}_${idx}`}
                         id={`player-row-${pData.name}`}
-                        className={`transition-colors duration-200 hover:bg-white/5 ${isSelected ? 'bg-gold/15 border-l-2 border-gold' : 'border-l-2 border-transparent'}`}
+                        className={`transition-colors duration-150 hover:bg-white/5 ${isSelected ? 'bg-gold/15' : ''}`}
                       >
-                        <td className="px-2 py-2.5 font-bold text-white text-xs font-sans text-center whitespace-nowrap">{pData.name}</td>
-                        <td className="px-1.5 py-2.5 text-xs font-sans text-center whitespace-nowrap text-gray-300">{pData.age}</td>
-                        <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap font-medium text-gray-200">{posText}</td>
-                        <td className="px-2 py-2.5 text-xs font-mono text-center text-gold font-bold whitespace-nowrap">{warText}</td>
-                        <td className="px-2.5 py-2.5 text-xs font-mono text-center font-bold text-emerald-400 whitespace-nowrap">{formatCurrency(pData.salary)}</td>
-                        <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap text-gray-300">{pData.draftYearDisplay || (typeof pData.draftYear === 'number' ? `${pData.draftYear}년` : pData.draftYear)}</td>
-                        <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap text-gray-300">{pData.serviceTime}</td>
-                        <td className="px-2 py-2.5 text-center whitespace-nowrap text-xs font-sans">
+                        <td className={`px-2 py-2.5 font-bold text-white text-xs font-sans text-center whitespace-nowrap truncate ${isSelected ? 'border-l-2 border-gold' : ''}`}>
+                          {pData.name}
+                        </td>
+                        <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap text-gray-300 truncate">{pData.age}</td>
+                        <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap font-medium text-gray-200 truncate">{posText}</td>
+                        <td className="px-2 py-2.5 text-xs font-mono text-center text-gold font-bold whitespace-nowrap truncate">{warText}</td>
+                        <td className="px-2 py-2.5 text-xs font-mono text-center font-bold text-emerald-400 whitespace-nowrap truncate">{formatCurrency(pData.salary)}</td>
+                        <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap text-gray-300 truncate">{pData.draftYearDisplay || (typeof pData.draftYear === 'number' ? `${pData.draftYear}년` : pData.draftYear)}</td>
+                        <td className="px-2 py-2.5 text-xs font-sans text-center whitespace-nowrap text-gray-300 truncate">{pData.serviceTime}</td>
+                        <td className="px-2 py-2.5 text-center whitespace-nowrap text-xs font-sans truncate">
                           <button onClick={() => handleEditPlayer(pData)} className="text-amber-400 hover:text-amber-300 mr-2 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap">수정</button>
                           <button onClick={() => handleDeletePlayer(pData.id)} className="text-red-400 hover:text-red-300 text-[11px] font-bold transition-colors cursor-pointer whitespace-nowrap">삭제</button>
                         </td>
@@ -1170,29 +1201,29 @@ export default function ReverseEngineering() {
                 )}
               </tbody>
               {displayedRoster.length > 0 && (
-                <tfoot className="bg-black/60 border-t border-white/10 font-medium text-xs text-gray-300 sticky bottom-0 z-10 backdrop-blur-sm">
+                <tfoot className="bg-[#121620] border-t border-white/10 font-medium text-xs text-gray-300 sticky bottom-0 z-10 shadow-sm">
                   <tr>
-                    <td className="px-2 py-2.5 font-bold text-white text-center whitespace-nowrap">
+                    <td className="px-2 py-2.5 font-bold text-white text-center whitespace-nowrap truncate text-[11px]">
                       합계 / 평균 ({rosterPlayerCount}명)
                     </td>
-                    <td className="px-1.5 py-2.5 text-center text-gray-400 whitespace-nowrap">
+                    <td className="px-2 py-2.5 text-center text-white whitespace-nowrap truncate">
                       {rosterPlayerCount > 0 ? `${(displayedRoster.reduce((sum, p) => sum + (typeof p.age === 'number' ? p.age : parseInt(String(p.age)) || 26), 0) / rosterPlayerCount).toFixed(1)}세` : '-'}
                     </td>
-                    <td className="px-2 py-2.5 text-center text-gray-400 whitespace-nowrap">
+                    <td className="px-2 py-2.5 text-center text-white whitespace-nowrap truncate">
                       {filterCategory === 'position' && filterQuery !== 'ALL' ? filterQuery : '전체'}
                     </td>
-                    <td className="px-2 py-2.5 text-center font-bold text-gold whitespace-nowrap">
+                    <td className="px-2 py-2.5 text-center font-bold text-gold whitespace-nowrap truncate">
                       평균 {rosterAvgWar}
                     </td>
-                    <td className="px-2.5 py-2.5 text-center whitespace-nowrap">
-                      <div className="flex items-center justify-center gap-1 whitespace-nowrap font-mono">
-                        <span className="font-bold text-gold text-xs">{formatCurrency(rosterTotalSalary)}</span>
+                    <td className="px-2 py-2.5 text-center whitespace-nowrap truncate">
+                      <div className="flex items-center justify-center gap-1 whitespace-nowrap font-mono text-xs">
+                        <span className="font-bold text-gold">{formatCurrency(rosterTotalSalary)}</span>
                         <span className="text-[10px] text-emerald-400 font-semibold">(평균 {formatCurrency(rosterAvgSalary)})</span>
                       </div>
                     </td>
-                    <td className="px-2 py-2.5 text-center text-gray-500 whitespace-nowrap">-</td>
-                    <td className="px-2 py-2.5 text-center text-gray-500 whitespace-nowrap">-</td>
-                    <td className="px-2 py-2.5 text-center text-gray-500 whitespace-nowrap">-</td>
+                    <td className="px-2 py-2.5 text-center text-gray-500 whitespace-nowrap truncate">-</td>
+                    <td className="px-2 py-2.5 text-center text-gray-500 whitespace-nowrap truncate">-</td>
+                    <td className="px-2 py-2.5 text-center text-gray-500 whitespace-nowrap truncate">-</td>
                   </tr>
                 </tfoot>
               )}
@@ -1202,7 +1233,7 @@ export default function ReverseEngineering() {
           {/* 테이블 아랫 쪽: 총합 및 평균 연봉 요약 바 */}
           <div className="p-3.5 bg-black/60 border-t border-white/5 flex flex-wrap items-center justify-between gap-4 text-xs text-gray-400">
             <div className="flex items-center gap-2">
-              <span className="text-gray-400">선수단 인원:</span>
+              <span className="text-white">선수단 인원:</span>
               <span className="font-bold text-white font-mono">{rosterPlayerCount}명</span>
               {filterCategory !== 'ALL' && filterQuery !== 'ALL' && filterQuery !== '' && (
                 <span className="text-gold font-medium">
@@ -1210,7 +1241,7 @@ export default function ReverseEngineering() {
                 </span>
               )}
               {sortField && (
-                <span className="text-gray-500 text-[11px] ml-1">
+                <span className="text-[#dddddd] text-[11px] ml-1">
                   • 정렬: {sortField === 'name' ? '선수명' : sortField === 'age' ? '나이' : sortField === 'position' ? '포지션' : sortField === 'war' ? 'WAR' : sortField === 'salary' ? '현재 연봉' : sortField === 'draftYear' ? '입단 연도' : '등록일수'} ({sortDirection === 'asc' ? '오름차순 ↑' : '내림차순 ↓'})
                 </span>
               )}
@@ -1218,12 +1249,12 @@ export default function ReverseEngineering() {
 
             <div className="flex items-center gap-4 font-mono">
               <div className="flex items-center gap-1.5">
-                <span className="text-gray-400">현재 연봉 총합:</span>
+                <span className="text-white">현재 연봉 총합:</span>
                 <span className="font-bold text-gold text-sm">{formatCurrency(rosterTotalSalary)}</span>
               </div>
               <span className="text-white/20">|</span>
               <div className="flex items-center gap-1.5">
-                <span className="text-gray-400">선수 1인당 평균 연봉:</span>
+                <span className="text-white">선수 1인당 평균 연봉:</span>
                 <span className="font-bold text-emerald-400 text-sm">{formatCurrency(rosterAvgSalary)}</span>
               </div>
             </div>

@@ -23,7 +23,7 @@ export default function Sidebar() {
           </div>
           <div>
             <h1 className="text-xs tracking-wider font-bold text-gold uppercase">KBO 에이전트 시스템</h1>
-            <div className="text-sm font-black tracking-tight text-white font-sans">
+            <div className="text-[14px] font-black tracking-tight text-white font-sans">
               NOWIWON MANAGEMENT GROUP
             </div>
           </div>
@@ -33,7 +33,7 @@ export default function Sidebar() {
       
       {/* 메인 메뉴 네비게이션 */}
       <div className="flex flex-col flex-1 py-4 px-3 space-y-1 bg-[#0A0D14]">
-        <div className="px-3 py-2 text-xs uppercase tracking-wider text-gray-400 font-bold">
+        <div className="px-3 py-2 text-[18px] uppercase tracking-wider text-white font-bold">
           메인 메뉴
         </div>
         {links.map((link) => {
@@ -56,7 +56,7 @@ export default function Sidebar() {
               )}>
                 <Icon className="w-3.5 h-3.5 stroke-[2.2]" />
               </div>
-              <span className="tracking-tight">{link.name}</span>
+              <span className="tracking-tight text-[16px]">{link.name}</span>
               {isActive && (
                 <div className="ml-auto w-1.5 h-1.5 rounded-full bg-gold animate-pulse" />
               )}

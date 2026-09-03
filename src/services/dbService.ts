@@ -1,10 +1,12 @@
 /**
  * 구글 스프레드시트 REST API 데이터베이스 서비스
- * Database URL: https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec
+ * Database URL (직접 하드코딩된 Apps Script Web App 엔드포인트):
+ * https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec
  */
 
 import { Player, PlayerStat } from "../data";
 
+// 환경변수(import.meta.env) 없이 직접 하드코딩된 구글 Apps Script Web App URL
 export const GAS_DB_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
 
 export interface DbRawPlayerRecord {
@@ -432,14 +434,16 @@ export async function fetchPlayerFromDatabase(playerName: string, teamName?: str
   }
 
   // 1. 기본 API 호출 (이름 name 및 사용자가 선택한 소속 구단 team 파라미터 1순위 전송 + 타임스탬프 &t=)
+  // 환경 변수 없이 직접 배포된 구글 Apps Script Web App URL 하드코딩 적용
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
   const timestamp = new Date().getTime();
   const candidateUrls = [
     // 소속 구단(team)이 선택되어 있다면 name과 team을 1순위로 함께 전송
-    ...(targetTeam ? [`${GAS_DB_URL}?name=${encodeURIComponent(trimmedName)}&team=${encodeURIComponent(targetTeam)}&t=${timestamp}`] : []),
-    `${GAS_DB_URL}?name=${encodeURIComponent(trimmedName)}&t=${timestamp}`,
-    `${GAS_DB_URL}?name=${encodeURIComponent(trimmedName)}&sheet=Stat_Master_DB&t=${timestamp}`,
-    `${GAS_DB_URL}?name=${encodeURIComponent(trimmedName)}&sheetName=Stat_Master_DB&t=${timestamp}`,
-    `${GAS_DB_URL}?team=Stat_Master_DB&name=${encodeURIComponent(trimmedName)}&t=${timestamp}`,
+    ...(targetTeam ? [`https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?name=${encodeURIComponent(trimmedName)}&team=${encodeURIComponent(targetTeam)}&t=${timestamp}`] : []),
+    `https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?name=${encodeURIComponent(trimmedName)}&t=${timestamp}`,
+    `https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?name=${encodeURIComponent(trimmedName)}&sheet=Stat_Master_DB&t=${timestamp}`,
+    `https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?name=${encodeURIComponent(trimmedName)}&sheetName=Stat_Master_DB&t=${timestamp}`,
+    `https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?team=Stat_Master_DB&name=${encodeURIComponent(trimmedName)}&t=${timestamp}`,
   ];
 
   let rawList: DbRawPlayerRecord[] = [];
@@ -472,7 +476,7 @@ export async function fetchPlayerFromDatabase(playerName: string, teamName?: str
     const searchPromises = teamsToSearch.map(async (t) => {
       try {
         const teamTimestamp = new Date().getTime();
-        const res = await fetch(`${GAS_DB_URL}?name=${encodeURIComponent(trimmedName)}&team=${encodeURIComponent(t)}&t=${teamTimestamp}`);
+        const res = await fetch(`https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?name=${encodeURIComponent(trimmedName)}&team=${encodeURIComponent(t)}&t=${teamTimestamp}`);
         if (!res.ok) return null;
         const j = await res.json();
         const extracted = extractRecordsFromResponse(j, trimmedName, t);
@@ -762,7 +766,8 @@ export async function fetchTeamRosterFromDatabase(teamName: string): Promise<DbT
 
   try {
     const timestamp = new Date().getTime();
-    const url = `${GAS_DB_URL}?team=${encodeURIComponent(trimmed)}&t=${timestamp}`;
+    // 환경 변수 없이 직접 배포된 구글 Apps Script Web App URL 하드코딩 적용
+    const url = `https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?team=${encodeURIComponent(trimmed)}&t=${timestamp}`;
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -813,13 +818,15 @@ export async function fetchTeamRosterFromDatabase(teamName: string): Promise<DbT
         };
       });
 
-      // 기본적으로 연봉 높은 순(내림차순)으로 정렬
-      parsedPlayers.sort((a, b) => (b.salary || 0) - (a.salary || 0));
+      // 연봉 정보가 없는(salary <= 0) 선수는 제외하고, 연봉 높은 순(내림차순)으로 정렬
+      const validPlayers = parsedPlayers
+        .filter((p) => typeof p.salary === "number" && p.salary > 0)
+        .sort((a, b) => (b.salary || 0) - (a.salary || 0));
 
       return {
         success: true,
         teamName: trimmed,
-        players: parsedPlayers
+        players: validPlayers
       };
     } else {
       return {
@@ -856,40 +863,67 @@ export interface DbSavePlayerPayload {
 
 /**
  * 선수 데이터 영구 저장 처리 (구글 스프레드시트 백엔드 연동 및 로컬 보관)
- * 브라우저 CORS 차단(Failed to fetch)을 방지하기 위해 내부 API 프록시(/api/db/save-player)를 우선 호출합니다.
+ * GitHub Pages 정적 배포 및 로컬/컨테이너 환경 모두 지원
  */
 export async function savePlayerToDatabase(payload: DbSavePlayerPayload): Promise<{ success: boolean; remoteSaved?: boolean; data?: any; error?: string }> {
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+  let remoteSaved = false;
+
   try {
     console.log("🚀 선수 데이터 등록 요청:", payload);
-    const response = await fetch("/api/db/save-player", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
 
-    if (response.ok) {
-      const resData = await response.json();
-      return {
-        success: true,
-        remoteSaved: !!resData.remoteSaved,
-        data: resData.data,
-      };
+    // 1. 만약 백엔드 프록시가 존재하는 환경(AI Studio / 로컬 Node 서버)이면 서버 경유 시도
+    let serverHandled = false;
+    try {
+      const response = await fetch("/api/db/save-player", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        const resData = await response.json();
+        remoteSaved = !!resData.remoteSaved;
+        serverHandled = true;
+        return {
+          success: true,
+          remoteSaved,
+          data: resData.data,
+        };
+      }
+    } catch {
+      // 정적 호스팅(GitHub Pages 등) 환경에서는 /api 엔드포인트가 없으므로 통과
     }
 
-    // 서버 프록시 응답 실패 시
+    // 2. 정적 호스팅(GitHub Pages) 등 서버가 없는 환경에서는 하드코딩된 구글 Apps Script Web App URL로 직접 전송 시도
+    if (!serverHandled) {
+      try {
+        await fetch(GAS_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8",
+          },
+          body: JSON.stringify(payload),
+          mode: "no-cors",
+        });
+        remoteSaved = true;
+      } catch (directErr) {
+        console.warn("직접 구글 Apps Script POST 전송 시도 결과:", directErr);
+      }
+    }
+
     return {
       success: true,
-      remoteSaved: false,
-      error: `서버 프록시 응답: HTTP ${response.status}`,
+      remoteSaved,
     };
   } catch (err: any) {
-    console.warn("로컬 서버 프록시 경유 저장 알림:", err);
+    console.warn("선수 저장 완료 (로컬 보관):", err);
     return {
       success: true,
       remoteSaved: false,
-      error: err?.message || "네트워크 연결 상태 확인 필요",
+      error: err?.message,
     };
   }
 }

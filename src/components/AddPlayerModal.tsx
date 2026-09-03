@@ -172,9 +172,9 @@ export function AddPlayerModal({
     setDbNotice(null);
 
     try {
-      // 1. fetch 요청 URL 생성 (name, team, t 파라미터 결합)
+      // 1. fetch 요청 URL 생성 (name, team, t 파라미터 결합 - Apps Script Web App URL 직접 하드코딩)
       const timestamp = new Date().getTime();
-      const apiUrl = `${GAS_DB_URL}?name=${encodeURIComponent(trimmedName)}&team=${encodeURIComponent(trimmedTeam)}&t=${timestamp}`;
+      const apiUrl = `https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?name=${encodeURIComponent(trimmedName)}&team=${encodeURIComponent(trimmedTeam)}&t=${timestamp}`;
       console.log(`🚀 구글 스프레드시트 DB 단일 요청 실행 URL: ${apiUrl}`);
 
       const response = await fetch(apiUrl);

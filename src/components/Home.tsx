@@ -186,7 +186,7 @@ export default function Home() {
               </span>
             </h2>
           </div>
-          <p className="text-xs text-gray-400 mt-1 pl-10.5">
+          <p className="text-[14px] text-gray-400 mt-1 pl-10.5">
             NOWIWON 소속 선수 프로필 및 기록 관리
           </p>
         </div>
@@ -217,7 +217,7 @@ export default function Home() {
         <div className="bg-[#131722] border border-white/10 p-5 rounded-2xl shadow-xl flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between pb-2 border-b border-white/10 mb-3">
-              <p className="text-xs text-gray-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+              <p className="text-[16px] text-white font-bold uppercase tracking-wider flex items-center gap-1.5">
                 <Users className="w-3.5 h-3.5 text-gold" />
                 소속 선수 및 구단 분포
               </p>
@@ -227,7 +227,7 @@ export default function Home() {
             </div>
             <div className="flex flex-col items-center justify-center py-2 my-1">
               <p className="text-3xl font-black tracking-tight text-white">{players.length}<span className="text-base font-normal text-gray-400 ml-1">명</span></p>
-              <p className="text-xs text-gray-400 mt-0.5">총 {activeTeamsCount}개 KBO 구단 소속</p>
+              <p className="text-[14px] text-gray-400 mt-0.5">총 {activeTeamsCount}개 KBO 구단 소속</p>
             </div>
           </div>
 
@@ -295,30 +295,30 @@ export default function Home() {
 
         <div className="overflow-x-auto rounded-xl border border-white/10 bg-black/30">
           <table className="w-full text-xs text-left whitespace-nowrap">
-            <thead className="text-[11.5px] text-center text-gray-400 uppercase tracking-wider bg-black/50 border-b border-white/10 font-bold whitespace-nowrap">
+            <thead className="text-[13px] text-center text-gray-400 uppercase tracking-wider bg-black/50 border-b border-white/10 font-bold whitespace-nowrap">
               <tr>
-                <th className="px-3 py-3 font-bold text-center text-white whitespace-nowrap">선수명</th>
-                <th className="px-2 py-3 font-bold text-white whitespace-nowrap">구단</th>
-                <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap">포지션</th>
-                <th className="px-2 py-3 font-bold text-white whitespace-nowrap">나이</th>
-                <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap">타율</th>
-                <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap">OPS</th>
-                <th className="px-2 py-3 font-bold text-white whitespace-nowrap">홈런</th>
-                <th className="px-2.5 py-3 font-bold text-gold whitespace-nowrap">최근 WAR</th>
-                <th className="px-3 py-3 font-bold text-white whitespace-nowrap">현재 연봉</th>
-                <th className="px-3 py-3 font-bold text-white whitespace-nowrap">
+                <th className="px-3 py-3 font-bold text-center text-white whitespace-nowrap text-[13px]">선수명</th>
+                <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">구단</th>
+                <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">포지션</th>
+                <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">나이</th>
+                <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">타율</th>
+                <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">OPS</th>
+                <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">홈런</th>
+                <th className="px-2.5 py-3 font-bold text-gold whitespace-nowrap text-[13px]">최근 WAR</th>
+                <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">현재 연봉</th>
+                <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">
                   <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                     <Calendar className="w-3 h-3 text-gold" />
-                    <span className="text-white">에이전트 계약기간</span>
+                    <span className="text-white text-[13px]">에이전트 계약기간</span>
                   </div>
                 </th>
-                <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap">
+                <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">
                   <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                     <UserCheck className="w-3 h-3 text-gold" />
-                    <span className="text-white">에이전트</span>
+                    <span className="text-white text-[13px]">에이전트</span>
                   </div>
                 </th>
-                <th className="px-3 py-3 font-bold text-white whitespace-nowrap">관리</th>
+                <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">관리</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5 whitespace-nowrap">
@@ -475,7 +475,7 @@ function StatCard({
     <div className="bg-[#131722] border border-white/10 p-5 rounded-2xl shadow-xl flex flex-col justify-between">
       <div>
         <div className="flex items-center justify-between pb-2 border-b border-white/10 mb-3">
-          <p className="text-xs text-gray-400 uppercase font-bold tracking-wider">{title}</p>
+          <p className="text-[16px] text-white uppercase font-bold tracking-wider">{title}</p>
           <div className="w-6 h-6 rounded-lg bg-black/40 border border-white/10 flex items-center justify-center">
             <Icon className={`w-3.5 h-3.5 ${color}`} />
           </div>
@@ -484,7 +484,7 @@ function StatCard({
           <p className="text-3xl font-black tracking-tight text-white">{value}</p>
         </div>
       </div>
-      {subText && <p className="text-xs text-gray-400 text-center mt-2 pt-2 border-t border-white/5">{subText}</p>}
+      {subText && <p className="text-[14px] text-gray-400 text-center mt-2 pt-2 border-t border-white/5">{subText}</p>}
     </div>
   );
 }

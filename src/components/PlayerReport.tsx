@@ -447,8 +447,8 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
 
         setReport(`Google 스프레드시트 DB로부터 '${resolvedTeam ? `${resolvedTeam} ` : ""}${trimmedName}' 선수의 포지션(${resolvedPos}) 및 3개년(2024~2026) 핵심 지표가 성공적으로 동기화되었습니다.`);
       } else {
-        // 2. 직접 GAS URL로 2차 시도 (history 배열 파싱)
-        const fallbackUrl = `${GAS_DB_URL}?name=${encodeURIComponent(trimmedName)}${targetTeam ? `&team=${encodeURIComponent(targetTeam)}` : ""}&t=${Date.now()}`;
+        // 2. 직접 배포된 구글 Apps Script Web App URL로 2차 시도 (history 배열 파싱)
+        const fallbackUrl = `https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?name=${encodeURIComponent(trimmedName)}${targetTeam ? `&team=${encodeURIComponent(targetTeam)}` : ""}&t=${Date.now()}`;
         const res = await fetch(fallbackUrl);
         if (res.ok) {
           const json = await res.json();
