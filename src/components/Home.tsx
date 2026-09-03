@@ -1,8 +1,14 @@
 import React, { useState, useEffect } from "react";
-import { mockPlayers, mockTeams, loadStoredPlayers, saveStoredPlayers, Player } from "../data";
+import { mockPlayers, mockTeams, loadStoredPlayers, saveStoredPlayers, Player, PlayerStat } from "../data";
 import {
   fetchPlayerFromDatabase,
-  convertDbToPlayer
+  fetchTeamRosterFromDatabase,
+  convertDbToPlayer,
+  cleanPosition,
+  parsePlayerAge,
+  parsePlayerSalary,
+  parseDraftYear,
+  parseServiceTime
 } from "../services/dbService";
 import {
   Users,
@@ -24,6 +30,82 @@ import { AddPlayerModal } from "./AddPlayerModal";
 import { EditPlayerModal } from "./EditPlayerModal";
 import { DeletePlayerModal } from "./DeletePlayerModal";
 
+/**
+ * 원시 데이터(Raw Record)를 대시보드 Player 객체 규격으로 안전하게 변환하는 헬퍼 함수
+ */
+function mapRawToPlayer(raw: any, index: number): Player | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  // 이미 완성된 Player 규격을 갖춘 경우
+  if (raw.id && raw.name && raw.team && Array.isArray(raw.stats) && raw.stats.length > 0) {
+    return {
+      id: String(raw.id),
+      name: String(raw.name),
+      team: String(raw.team),
+      position: cleanPosition(raw.position || "외야수"),
+      age: parsePlayerAge(raw.age),
+      salaryCurrent: parsePlayerSalary(raw.salaryCurrent),
+      draftYear: parseDraftYear(raw.draftYear).draftYear,
+      serviceTime: parseServiceTime(raw.serviceTime),
+      contractPeriod: raw.contractPeriod || "24년 01월 01일 ~ 26년 12월 31일",
+      agent: raw.agent || "이세인",
+      stats: raw.stats
+    };
+  }
+
+  const name = raw.name || raw["선수명"] || raw["이름"] || "";
+  if (!name || name === "선수" || name === "선수명") return null;
+
+  const team = raw.team || raw["구단"] || raw["팀"] || raw["소속"] || raw["팀명"] || "롯데 자이언츠";
+  const position = cleanPosition(raw.position || raw["포지션"] || "외야수");
+  const age = parsePlayerAge(raw.age ?? raw["나이"] ?? 27);
+  const salaryCurrent = parsePlayerSalary(raw.salaryCurrent ?? raw["현재 연봉"] ?? raw["현재연봉"] ?? raw["연봉"] ?? raw.salary);
+  const draftInfo = parseDraftYear(raw.draftYear ?? raw["입단 연도"] ?? raw["입단연도"]);
+  const serviceTime = parseServiceTime(raw.serviceTime ?? raw["등록일수"] ?? raw["총등록일수"] ?? "");
+  const contractPeriod = raw.contractPeriod || raw["에이전트 계약기간 관리"] || raw["계약기간"] || "24년 01월 01일 ~ 26년 12월 31일";
+  const agent = raw.agent || raw["담당 에이전트"] || raw["에이전트"] || "이세인";
+
+  // stats 추출
+  let stats: PlayerStat[] = [];
+  if (Array.isArray(raw.stats) && raw.stats.length > 0) {
+    stats = raw.stats;
+  } else {
+    const rawWar = raw["핵심 스탯(WAR)"] ?? raw["WAR"] ?? raw.war ?? raw["최근 WAR"] ?? 0;
+    const war = typeof rawWar === "number" ? rawWar : (parseFloat(String(rawWar)) || null);
+    const rawAvg = raw["타율"] ?? raw["AVG"] ?? raw.avg ?? 0;
+    const avg = typeof rawAvg === "number" ? rawAvg : (parseFloat(String(rawAvg)) || undefined);
+    const rawOps = raw["OPS"] ?? raw.ops ?? 0;
+    const ops = typeof rawOps === "number" ? rawOps : (parseFloat(String(rawOps)) || undefined);
+    const rawHr = raw["홈런"] ?? raw["HR"] ?? raw.hr ?? 0;
+    const hr = typeof rawHr === "number" ? rawHr : (parseInt(String(rawHr), 10) || undefined);
+
+    stats = [
+      {
+        year: 2026,
+        avg: avg !== undefined && !isNaN(avg) ? avg : undefined,
+        ops: ops !== undefined && !isNaN(ops) ? ops : undefined,
+        hr: hr !== undefined && !isNaN(hr) ? hr : undefined,
+        war: war !== null && !isNaN(war) ? Number(war.toFixed(2)) : null,
+        salary: salaryCurrent
+      }
+    ];
+  }
+
+  return {
+    id: String(raw.id || raw.playerId || `gas_player_${index}_${Date.now()}`),
+    name,
+    team,
+    position,
+    age,
+    salaryCurrent,
+    draftYear: draftInfo.draftYear > 0 ? draftInfo.draftYear : 2018,
+    serviceTime: serviceTime || "1년 0일",
+    contractPeriod,
+    agent,
+    stats
+  };
+}
+
 export default function Home() {
   const [players, setPlayers] = useState<Player[]>(loadStoredPlayers);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -35,6 +117,99 @@ export default function Home() {
   const [isBatchSyncing, setIsBatchSyncing] = useState(false);
   const [syncingPlayerId, setSyncingPlayerId] = useState<string | null>(null);
 
+  // 구글 Apps Script Web App 직접 하드코딩 엔드포인트 주소
+  const GAS_DB_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+
+  // 1. 초기 데이터 로드: 메인 대시보드가 처음 렌더링될 때 전체 선수 데이터를 구글 Apps Script에서 fetch
+  useEffect(() => {
+    const fetchDashboardPlayers = async () => {
+      try {
+        const timestamp = new Date().getTime();
+        const fetchUrl = `${GAS_DB_URL}?t=${timestamp}`;
+        const response = await fetch(fetchUrl);
+
+        if (!response.ok) {
+          throw new Error(`DB 통신 오류 (HTTP ${response.status})`);
+        }
+
+        const data = await response.json();
+        console.log('대시보드 데이터 로드 성공:', data);
+
+        // 방어 로직: 데이터 구조가 배열이 아니라면 안전하게 배열로 매핑
+        let rawList: any[] = [];
+        if (Array.isArray(data)) {
+          rawList = data;
+        } else if (Array.isArray(data?.data)) {
+          rawList = data.data;
+        } else if (Array.isArray(data?.players)) {
+          rawList = data.players;
+        } else if (Array.isArray(data?.records)) {
+          rawList = data.records;
+        } else if (Array.isArray(data?.items)) {
+          rawList = data.items;
+        } else if (Array.isArray(data?.result)) {
+          rawList = data.result;
+        } else if (data && typeof data === "object") {
+          const values = Object.values(data);
+          if (values.length > 0 && typeof values[0] === "object") {
+            rawList = values as any[];
+          }
+        }
+
+        // 객체 배열을 Player 인터페이스 규격으로 변환
+        let mappedPlayers = rawList
+          .map((item, idx) => mapRawToPlayer(item, idx))
+          .filter((p): p is Player => p !== null);
+
+        // 만약 GAS 기본 호출 시 별도 검색 파라미터가 없어 결과가 비어있고, 현재 로컬스토리지에도 선수가 0명인 경우:
+        // 구글 스프레드시트 5개 시트 JOIN DB에서 실제 KBO 구단 로스터를 조회하여 대시보드 선수 데이터를 연동
+        if (mappedPlayers.length === 0) {
+          const localStored = loadStoredPlayers();
+          if (localStored.length > 0) {
+            mappedPlayers = localStored;
+          } else {
+            try {
+              const rosterRes = await fetchTeamRosterFromDatabase("롯데 자이언츠");
+              if (rosterRes.success && rosterRes.players.length > 0) {
+                mappedPlayers = rosterRes.players.map((tp, idx) => ({
+                  id: String(tp.id || `lotte_${idx}`),
+                  name: tp.name,
+                  team: "롯데 자이언츠",
+                  position: tp.position || "외야수",
+                  age: parsePlayerAge(tp.age),
+                  salaryCurrent: tp.salary || 0,
+                  draftYear: parseDraftYear(tp.draftYear).draftYear || 2018,
+                  serviceTime: String(tp.serviceTime || "1년 0일"),
+                  contractPeriod: "24년 01월 01일 ~ 26년 12월 31일",
+                  agent: "이세인",
+                  stats: [
+                    {
+                      year: 2026,
+                      war: tp.war,
+                      salary: tp.salary
+                    }
+                  ]
+                }));
+              }
+            } catch (fallbackErr) {
+              console.warn("대시보드 기본 로스터 로드 시도 결과:", fallbackErr);
+            }
+          }
+        }
+
+        if (mappedPlayers.length > 0) {
+          setPlayers(mappedPlayers);
+          saveStoredPlayers(mappedPlayers);
+        }
+      } catch (error) {
+        console.error('대시보드 데이터 로드 실패:', error);
+      }
+    };
+
+    fetchDashboardPlayers();
+  }, []);
+
+  // 2. 다른 컴포넌트나 탭에서 선수가 등록/수정/삭제되었을 때 이벤트 수신
   useEffect(() => {
     const handleUpdate = () => {
       setPlayers(loadStoredPlayers());
