@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { mockTeams, Player, PlayerStat } from "../data";
+import { mockTeams, Player, PlayerStat, AVAILABLE_AGENTS } from "../data";
 import {
   X,
   Sparkles,
@@ -112,8 +112,15 @@ export function EditPlayerModal({
   });
 
   const parsedDates = parseDatesFromPeriod(player.contractPeriod);
+  const [agent, setAgent] = useState<string>(player.agent || "이세인");
   const [contractStartDate, setContractStartDate] = useState(parsedDates.start);
   const [contractEndDate, setContractEndDate] = useState(parsedDates.end);
+
+  useEffect(() => {
+    if (player) {
+      setAgent(player.agent || "이세인");
+    }
+  }, [player]);
 
   const handleContractStartDateChange = (val: string) => {
     setContractStartDate(val);
@@ -175,6 +182,7 @@ export function EditPlayerModal({
       serviceTime,
       salaryCurrent: currentSalaryWon,
       contractPeriod: contractPeriodText,
+      agent,
       stats: finalStats,
     };
 
@@ -538,14 +546,33 @@ export function EditPlayerModal({
             )}
           </div>
 
-          {/* 에이전트 계약기간 */}
-          <div className="bg-[#12151c] p-4 rounded-xl border border-white/10 space-y-3">
+          {/* 에이전트 계약기간 및 담당 에이전트 */}
+          <div className="bg-[#12151c] p-4 rounded-xl border border-white/10 space-y-3.5">
             <label className="text-xs font-bold text-gold uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap">
               <Calendar className="w-3.5 h-3.5 text-gold" />
-              에이전트와의 계약기간 수정
+              에이전트와의 계약기간 및 담당 에이전트 수정
             </label>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* 담당 에이전트 드롭다운 */}
+              <div>
+                <label className="block text-[11px] font-bold text-gold mb-1.5 whitespace-nowrap flex items-center gap-1">
+                  <UserCheck className="w-3.5 h-3.5 text-gold" />
+                  담당 에이전트 <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  value={agent}
+                  onChange={(e) => setAgent(e.target.value)}
+                  className="w-full h-10 bg-black/50 border border-gold/40 rounded-lg px-3 text-sm text-white font-bold focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold transition-colors cursor-pointer"
+                >
+                  {AVAILABLE_AGENTS.map((a) => (
+                    <option key={a} value={a} className="bg-[#1a1d24] text-white">
+                      {a} 에이전트
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-[11px] font-semibold text-gray-400 mb-1.5 whitespace-nowrap">
                   계약 시작일
@@ -575,16 +602,22 @@ export function EditPlayerModal({
               </div>
             </div>
 
-            <div className="bg-black/40 h-10 px-3.5 rounded-lg border border-white/5 flex items-center justify-between text-xs flex-wrap gap-2">
+            <div className="bg-black/40 min-h-10 py-2 px-3.5 rounded-lg border border-white/5 flex items-center justify-between text-xs flex-wrap gap-2">
               <span className="text-gray-400 flex items-center gap-1.5 whitespace-nowrap">
                 <Clock className="w-3.5 h-3.5 text-gold" />
                 표시 형태:
               </span>
-              <span className="font-mono font-bold text-white bg-gold/15 border border-gold/30 px-2.5 py-1 rounded text-[12px] whitespace-nowrap">
-                {contractStartDate && contractEndDate
-                  ? `${formatDateToKorean(contractStartDate)} ~ ${formatDateToKorean(contractEndDate)}`
-                  : player.contractPeriod}
-              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gold/15 border border-gold/30 text-gold font-bold text-xs whitespace-nowrap">
+                  <UserCheck className="w-3 h-3 text-gold" />
+                  담당: {agent}
+                </span>
+                <span className="font-mono font-bold text-white bg-white/5 border border-white/10 px-2.5 py-1 rounded text-xs whitespace-nowrap">
+                  {contractStartDate && contractEndDate
+                    ? `${formatDateToKorean(contractStartDate)} ~ ${formatDateToKorean(contractEndDate)}`
+                    : player.contractPeriod}
+                </span>
+              </div>
             </div>
           </div>
         </div>

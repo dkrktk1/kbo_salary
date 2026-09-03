@@ -17,8 +17,12 @@ export interface Player {
   draftYear: number;
   serviceTime: string;
   contractPeriod?: string; // 에이전트와의 계약기간 (예: "24년 01월 01일 ~ 26년 12월 31일")
+  agent?: string; // 담당 에이전트 ("이세인" | "김승현")
   stats: PlayerStat[];
 }
+
+export const AVAILABLE_AGENTS = ["이세인", "김승현"] as const;
+export type AgentName = typeof AVAILABLE_AGENTS[number];
 
 export interface Team {
   id: string;

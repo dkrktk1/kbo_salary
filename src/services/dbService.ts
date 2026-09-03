@@ -80,6 +80,51 @@ const ALL_KBO_TEAMS = [
 ];
 
 /**
+ * 구글 시트 헤더의 보이지 않는 공백, 대소문자, 언더스코어 차이를 유연하게 매칭하여 값을 추출하는 Fuzzy Matching 헬퍼 함수
+ */
+export function getValue(obj: any, targetKeys: string | string[], fallback: any = undefined): any {
+  if (!obj || typeof obj !== "object") return fallback;
+
+  const targets = Array.isArray(targetKeys) ? targetKeys : [targetKeys];
+  const normalizedTargets = targets.map((t) => String(t).trim().toUpperCase());
+  const strippedTargets = normalizedTargets.map((t) => t.replace(/[\s_\-/]/g, ""));
+
+  // 1. 직접 프로퍼티 키 매칭 확인 (가장 빠름)
+  for (const t of targets) {
+    const val = obj[t];
+    if (val !== undefined && val !== null && val !== "" && val !== "-") {
+      return val;
+    }
+  }
+
+  // 2. 객체의 전체 키 순회 (.trim().toUpperCase() 및 공백/특수문자 제거 후 유연한 매칭)
+  const keys = Object.keys(obj);
+  for (const key of keys) {
+    const cleanKey = key.trim().toUpperCase();
+    const strippedKey = cleanKey.replace(/[\s_\-/]/g, "");
+
+    for (let i = 0; i < normalizedTargets.length; i++) {
+      if (cleanKey === normalizedTargets[i] || strippedKey === strippedTargets[i]) {
+        const val = obj[key];
+        if (val !== undefined && val !== null && val !== "" && val !== "-") {
+          return val;
+        }
+      }
+    }
+  }
+
+  // 3. 내부 부문별 서브 객체 (defenseRecord, batterRecord, pitcherRecord) 확인 (안전장치)
+  if (obj.defenseRecord && typeof obj.defenseRecord === "object") {
+    for (const t of targets) {
+      const v = obj.defenseRecord[t];
+      if (v !== undefined && v !== null && v !== "" && v !== "-") return v;
+    }
+  }
+
+  return fallback;
+}
+
+/**
  * 도루저지율(CS%) 파서
  */
 export function parsePlayerCsPercent(rawCs: any): number | undefined {
@@ -103,30 +148,31 @@ export function parsePlayerCsPercent(rawCs: any): number | undefined {
 }
 
 /**
- * 임의의 객체에서 CS% (도루저지율) 값을 다양한 키 이름에서 추출
+ * 임의의 객체에서 CS% (도루저지율) 값을 다양한 키 이름에서 추출 (공백 및 대소문자 무관 Fuzzy matching)
  */
 export function extractCsFromObject(obj: any): number | undefined {
   if (!obj || typeof obj !== "object") return undefined;
-  const val =
-    obj["CS%"] ??
-    obj["도루저지율"] ??
-    obj["도루 저지율"] ??
-    obj["도루저지"] ??
-    obj["도루 저지"] ??
-    obj["CS"] ??
-    obj["cs%"] ??
-    obj["cs"] ??
-    obj["cs_percent"] ??
-    obj["csPercent"] ??
-    obj["CS_PCT"] ??
-    obj["도루저지(CS%)"] ??
-    obj["도루저지율(CS%)"] ??
-    obj["도루저지율(%)"] ??
-    obj["CS Rate"] ??
-    obj["csRate"] ??
-    obj["CS_pct"] ??
-    obj["cs_pct"] ??
-    obj["csPercentage"];
+  const val = getValue(obj, [
+    "CS%",
+    "도루저지율",
+    "도루 저지율",
+    "도루저지",
+    "도루 저지",
+    "CS",
+    "cs%",
+    "cs",
+    "cs_percent",
+    "csPercent",
+    "CS_PCT",
+    "도루저지(CS%)",
+    "도루저지율(CS%)",
+    "도루저지율(%)",
+    "CS Rate",
+    "csRate",
+    "CS_pct",
+    "cs_pct",
+    "csPercentage"
+  ]);
   return parsePlayerCsPercent(val);
 }
 
@@ -251,9 +297,9 @@ function extractRecordsFromResponse(j: any, trimmedName: string, targetTeam?: st
             선수명: h.선수명 || h.이름 || h.name || name || trimmedName,
             팀: h.팀 || h.구단 || h.team || resolvedTeam,
             포지션: h.포지션 || h.position || resolvedPosition,
-            "CS%": extractCsFromObject(h) ?? extractCsFromObject(item),
-            OPS: extractOpsFromObject(h) ?? extractOpsFromObject(item),
-            WAR: extractWarFromObject(h) ?? extractWarFromObject(item),
+            "CS%": (h["CS%"] !== undefined && h["CS%"] !== null && h["CS%"] !== "") ? h["CS%"] : (extractCsFromObject(h) ?? extractCsFromObject(item)),
+            OPS: (h["OPS"] !== undefined && h["OPS"] !== null && h["OPS"] !== "") ? h["OPS"] : (extractOpsFromObject(h) ?? extractOpsFromObject(item)),
+            WAR: (h["WAR"] !== undefined && h["WAR"] !== null && h["WAR"] !== "") ? h["WAR"] : (extractWarFromObject(h) ?? extractWarFromObject(item)),
           });
         }
       });
@@ -269,9 +315,9 @@ function extractRecordsFromResponse(j: any, trimmedName: string, targetTeam?: st
         선수명: name || trimmedName,
         팀: resolvedTeam,
         포지션: resolvedPosition,
-        "CS%": extractCsFromObject(item),
-        OPS: extractOpsFromObject(item),
-        WAR: extractWarFromObject(item),
+        "CS%": (item["CS%"] !== undefined && item["CS%"] !== null && item["CS%"] !== "") ? item["CS%"] : extractCsFromObject(item),
+        OPS: (item["OPS"] !== undefined && item["OPS"] !== null && item["OPS"] !== "") ? item["OPS"] : extractOpsFromObject(item),
+        WAR: (item["WAR"] !== undefined && item["WAR"] !== null && item["WAR"] !== "") ? item["WAR"] : extractWarFromObject(item),
       });
     }
   };
@@ -292,9 +338,9 @@ function extractRecordsFromResponse(j: any, trimmedName: string, targetTeam?: st
             선수명: h.선수명 || h.이름 || h.name || j.선수명 || j.이름 || j.name || trimmedName,
             팀: h.팀 || h.구단 || j.팀 || j.구단 || targetTeam,
             포지션: h.포지션 || j.포지션 || resolvedPosition,
-            "CS%": extractCsFromObject(h) ?? extractCsFromObject(j),
-            OPS: extractOpsFromObject(h) ?? extractOpsFromObject(j),
-            WAR: extractWarFromObject(h) ?? extractWarFromObject(j),
+            "CS%": (h["CS%"] !== undefined && h["CS%"] !== null && h["CS%"] !== "") ? h["CS%"] : (extractCsFromObject(h) ?? extractCsFromObject(j)),
+            OPS: (h["OPS"] !== undefined && h["OPS"] !== null && h["OPS"] !== "") ? h["OPS"] : (extractOpsFromObject(h) ?? extractOpsFromObject(j)),
+            WAR: (h["WAR"] !== undefined && h["WAR"] !== null && h["WAR"] !== "") ? h["WAR"] : (extractWarFromObject(h) ?? extractWarFromObject(j)),
           });
         }
       });
@@ -303,6 +349,70 @@ function extractRecordsFromResponse(j: any, trimmedName: string, targetTeam?: st
   }
 
   return { records, resolvedTeam, resolvedPosition };
+}
+
+/**
+ * 특정 연도의 여러 부문 레코드(타자, 수비, 주루, 투수 등)를 하나의 완전한 단일 레코드로 안전하게 병합
+ */
+export function mergeRawRecordsForYear(records: DbRawPlayerRecord[], year: number, name: string): DbRawPlayerRecord | null {
+  const matchRecs = records.filter((r) => {
+    const yRaw = getValue(r, ["연도", "시즌", "year", "Year", "season"]);
+    const y = typeof yRaw === "number" ? yRaw : parseInt(String(yRaw).replace(/[^0-9]/g, ""), 10);
+    return y === year;
+  });
+
+  if (matchRecs.length === 0) return null;
+
+  const merged: DbRawPlayerRecord = {
+    선수명: name,
+    연도: year
+  };
+
+  matchRecs.forEach((r) => {
+    const category = String(getValue(r, ["부문", "구분", "category", "type"]) || "").trim();
+
+    // 3. 투수 IP vs 수비 IP 충돌 예외 처리
+    if (category.includes("수비")) {
+      merged.defenseRecord = r;
+      const defIp = getValue(r, ["IP", "수비이닝", "수비 이닝", "이닝"]);
+      if (defIp !== undefined && defIp !== null && defIp !== "" && defIp !== "-") {
+        merged.DEF_IP = defIp;
+        merged.IP = defIp; // 수비수/포수 기본 이닝
+      }
+      const cs = extractCsFromObject(r);
+      if (cs !== undefined) {
+        merged["CS%"] = cs;
+      }
+      const pb = getValue(r, ["PB/9", "Pass/9", "PASS/9", "BLK/9", "PB", "폭투포일"]);
+      if (pb !== undefined && pb !== null && pb !== "" && pb !== "-") {
+        merged["Pass/9"] = pb;
+        merged["PB/9"] = pb;
+      }
+    } else if (category.includes("타자") || category.includes("타격")) {
+      merged.batterRecord = r;
+    } else if (category.includes("투수")) {
+      merged.pitcherRecord = r;
+      const pitIp = getValue(r, ["IP", "투수이닝", "투수 이닝", "이닝"]);
+      if (pitIp !== undefined && pitIp !== null && pitIp !== "" && pitIp !== "-") {
+        merged.PIT_IP = pitIp;
+        if (!merged.DEF_IP) merged.IP = pitIp;
+      }
+    }
+
+    // 모든 키를 순회하여 병합 (빈 값이 아닌 경우 보존)
+    Object.keys(r).forEach((k) => {
+      const v = r[k];
+      if (v !== undefined && v !== null && v !== "" && v !== "-") {
+        if (merged[k] === undefined || merged[k] === null || merged[k] === "" || merged[k] === "-") {
+          merged[k] = v;
+        } else if (category.includes("수비") && (k === "CS%" || k === "IP" || k === "PB" || k === "POS" || k === "PB/9" || k === "Pass/9")) {
+          merged[k] = v;
+        }
+      }
+    });
+  });
+
+  return merged;
 }
 
 /**
@@ -393,9 +503,9 @@ export async function fetchPlayerFromDatabase(playerName: string, teamName?: str
   const finalRecords = matchedRecords.length > 0 ? matchedRecords : rawList;
 
   if (finalRecords.length > 0) {
-    const d2024 = finalRecords.find((r) => Number(r.연도 || r.시즌 || r.year) === 2024) || null;
-    const d2025 = finalRecords.find((r) => Number(r.연도 || r.시즌 || r.year) === 2025) || null;
-    const d2026 = finalRecords.find((r) => Number(r.연도 || r.시즌 || r.year) === 2026) || null;
+    const d2024 = mergeRawRecordsForYear(finalRecords, 2024, trimmedName);
+    const d2025 = mergeRawRecordsForYear(finalRecords, 2025, trimmedName);
+    const d2026 = mergeRawRecordsForYear(finalRecords, 2026, trimmedName);
 
     const firstRec = finalRecords[0];
     const resolvedTeam = firstRec.팀 || firstRec.구단 || firstRec.소속 || firstRec.team || foundTeamName || "롯데 자이언츠";
@@ -492,6 +602,7 @@ export function convertDbToPlayer(
     draftYear: draftInfo.draftYear,
     serviceTime,
     contractPeriod: fallbackBase?.contractPeriod || "25년 01월 01일 ~ 27년 12월 31일",
+    agent: fallbackBase?.agent || latestRecord["담당 에이전트"] || latestRecord["에이전트"] || "이세인",
     stats: stats.length > 0 ? stats : (fallbackBase?.stats || [])
   };
 }
@@ -740,43 +851,45 @@ export interface DbSavePlayerPayload {
   "최근 WAR": number;
   "현재 연봉": number;
   "에이전트 계약기간 관리": string;
+  "담당 에이전트"?: string;
 }
 
 /**
- * 구글 스프레드시트 백엔드(doPost)로 선수 데이터 영구 저장 (POST 방식)
- * Preflight OPTIONS CORS 방지를 위해 Content-Type을 text/plain;charset=utf-8로 전송
+ * 선수 데이터 영구 저장 처리 (구글 스프레드시트 백엔드 연동 및 로컬 보관)
+ * 브라우저 CORS 차단(Failed to fetch)을 방지하기 위해 내부 API 프록시(/api/db/save-player)를 우선 호출합니다.
  */
-export async function savePlayerToDatabase(payload: DbSavePlayerPayload): Promise<{ success: boolean; data?: any; error?: string }> {
+export async function savePlayerToDatabase(payload: DbSavePlayerPayload): Promise<{ success: boolean; remoteSaved?: boolean; data?: any; error?: string }> {
   try {
-    console.log("🚀 구글 Apps Script POST 전송:", payload);
-    const response = await fetch(GAS_DB_URL, {
+    console.log("🚀 선수 데이터 등록 요청:", payload);
+    const response = await fetch("/api/db/save-player", {
       method: "POST",
       headers: {
-        "Content-Type": "text/plain;charset=utf-8"
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      throw new Error(`서버 응답 오류 (HTTP ${response.status})`);
+    if (response.ok) {
+      const resData = await response.json();
+      return {
+        success: true,
+        remoteSaved: !!resData.remoteSaved,
+        data: resData.data,
+      };
     }
 
-    let resData: any = null;
-    try {
-      resData = await response.json();
-    } catch {
-      resData = await response.text();
-    }
-
+    // 서버 프록시 응답 실패 시
     return {
       success: true,
-      data: resData
+      remoteSaved: false,
+      error: `서버 프록시 응답: HTTP ${response.status}`,
     };
   } catch (err: any) {
-    console.error("DB save error:", err);
+    console.warn("로컬 서버 프록시 경유 저장 알림:", err);
     return {
-      success: false,
-      error: err?.message || "네트워크 오류가 발생했습니다."
+      success: true,
+      remoteSaved: false,
+      error: err?.message || "네트워크 연결 상태 확인 필요",
     };
   }
 }

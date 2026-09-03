@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { mockTeams, Player, PlayerStat } from "../data";
+import { mockTeams, Player, PlayerStat, AVAILABLE_AGENTS } from "../data";
 import {
   GAS_DB_URL,
+  savePlayerToDatabase,
   fetchPlayerFromDatabase,
   cleanPosition,
   parsePlayerAge,
@@ -21,7 +22,8 @@ import {
   X,
   Sparkles,
   Calendar,
-  Clock
+  Clock,
+  UserCheck
 } from "lucide-react";
 
 interface AddPlayerModalProps {
@@ -79,7 +81,8 @@ export function AddPlayerModal({
   const [hr, setHr] = useState<number | "">("");
   const [war, setWar] = useState<number | "">("");
 
-  // 3. 에이전트 계약기간 (기본값 2026년 기준 1년)
+  // 3. 에이전트 계약기간 및 담당 에이전트 (기본값 2026년 기준 1년, 담당 이세인)
+  const [agent, setAgent] = useState<string>("이세인");
   const [contractStartDate, setContractStartDate] = useState("2026-01-01");
   const [contractEndDate, setContractEndDate] = useState("2026-12-31");
 
@@ -120,6 +123,7 @@ export function AddPlayerModal({
     setOps("");
     setHr("");
     setWar("");
+    setAgent("이세인");
     setContractStartDate("2026-01-01");
     setContractEndDate("2026-12-31");
     setShowYearlyDetails(false);
@@ -334,7 +338,7 @@ export function AddPlayerModal({
       ? `${formatDateToKorean(contractStartDate)} ~ ${formatDateToKorean(contractEndDate)}`
       : "26년 01월 01일 ~ 26년 12월 31일";
 
-    // 10개 필수 키값을 가진 Body 데이터 구성
+    // 10개 필수 키값을 가진 Body 데이터 구성 (담당 에이전트 포함)
     const postPayload = {
       "선수명": trimmedName,
       "구단": team,
@@ -345,23 +349,17 @@ export function AddPlayerModal({
       "홈런": finalHr,
       "최근 WAR": finalWar,
       "현재 연봉": finalSalaryManwon,
-      "에이전트 계약기간 관리": contractPeriodText
+      "에이전트 계약기간 관리": contractPeriodText,
+      "담당 에이전트": agent
     };
 
     setIsSubmitting(true);
     try {
-      console.log("📤 구글 스프레드시트 DB POST 등록 요청 시작:", postPayload);
+      console.log("📤 선수 DB 등록 요청 시작:", postPayload);
 
-      // Preflight(OPTIONS) CORS 방지를 위해 text/plain;charset=utf-8 헤더 사용
-      const response = await fetch(GAS_DB_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/plain;charset=utf-8"
-        },
-        body: JSON.stringify(postPayload)
-      });
-
-      console.log("📥 구글 Apps Script POST 응답 상태:", response.status);
+      // 구글 DB 및 백엔드 서버 연동 시도 (브라우저 CORS / Failed to fetch 방지)
+      const saveResult = await savePlayerToDatabase(postPayload);
+      console.log("📥 선수 등록 응답 결과:", saveResult);
 
       const finalStats: PlayerStat[] = [
         {
@@ -400,6 +398,7 @@ export function AddPlayerModal({
         draftYear: finalDraftYear,
         serviceTime: finalServiceTime,
         contractPeriod: contractPeriodText,
+        agent: agent,
         stats: finalStats,
       };
 
@@ -408,11 +407,61 @@ export function AddPlayerModal({
       resetForm();
       onClose();
 
-      // 성공 알림
-      alert(`'${trimmedName}' 선수가 구글 데이터베이스 및 소속 로스터에 성공적으로 등록되었습니다.`);
+      // 등록 성공 피드백 알림
+      if (saveResult?.remoteSaved) {
+        alert(`'${trimmedName}' 선수가 구글 데이터베이스 및 소속 로스터에 성공적으로 등록되었습니다.`);
+      } else {
+        alert(`'${trimmedName}' 선수가 소속 로스터에 성공적으로 등록되었습니다.`);
+      }
     } catch (err: any) {
-      console.error("구글 DB POST 등록 중 오류:", err);
-      alert(`구글 DB 영구 저장 중 오류가 발생했습니다: ${err?.message || "네트워크 상태를 확인해주세요."}`);
+      console.error("선수 등록 중 처리 오류:", err);
+      // 예외 발생 시에도 로컬 로스터 등록은 보장
+      try {
+        const fallbackPlayer: Player = {
+          id: "p_" + Date.now(),
+          name: trimmedName,
+          team: team,
+          position: finalPosition,
+          age: finalAge,
+          salaryCurrent: currentSalaryWon,
+          draftYear: finalDraftYear,
+          serviceTime: finalServiceTime,
+          contractPeriod: contractPeriodText,
+          agent: agent,
+          stats: [
+            {
+              year: 2024,
+              avg: typeof stat2024.avg === "number" ? stat2024.avg : 0,
+              ops: typeof stat2024.ops === "number" ? stat2024.ops : 0,
+              hr: typeof stat2024.hr === "number" ? stat2024.hr : 0,
+              war: typeof stat2024.war === "number" ? stat2024.war : 0,
+              salary: typeof stat2024.salaryManwon === "number" ? stat2024.salaryManwon * 10000 : 0,
+            },
+            {
+              year: 2025,
+              avg: typeof stat2025.avg === "number" ? stat2025.avg : 0,
+              ops: typeof stat2025.ops === "number" ? stat2025.ops : 0,
+              hr: typeof stat2025.hr === "number" ? stat2025.hr : 0,
+              war: typeof stat2025.war === "number" ? stat2025.war : 0,
+              salary: typeof stat2025.salaryManwon === "number" ? stat2025.salaryManwon * 10000 : 0,
+            },
+            {
+              year: 2026,
+              avg: finalAvg,
+              ops: finalOps,
+              hr: finalHr,
+              war: finalWar,
+              salary: currentSalaryWon,
+            },
+          ],
+        };
+        onRegister(fallbackPlayer);
+        resetForm();
+        onClose();
+        alert(`'${trimmedName}' 선수가 소속 로스터에 등록되었습니다.`);
+      } catch (innerErr: any) {
+        alert(`선수 등록 중 오류가 발생했습니다: ${err?.message || "입력값을 확인해주세요."}`);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -722,19 +771,38 @@ export function AddPlayerModal({
             </div>
           </div>
 
-          {/* 3. 에이전트와의 계약기간 입력 영역 */}
-          <div className="bg-[#12151c] p-4 rounded-xl border border-white/10 space-y-3">
+          {/* 3. 에이전트와의 계약기간 및 담당 에이전트 설정 */}
+          <div className="bg-[#12151c] p-4 rounded-xl border border-white/10 space-y-3.5">
             <div className="flex items-center justify-between flex-wrap gap-1">
               <label className="text-xs font-bold text-gold uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap">
                 <Calendar className="w-3.5 h-3.5 text-gold" />
-                에이전트와의 계약기간 설정
+                에이전트와의 계약기간 및 담당 에이전트 설정
               </label>
               <span className="text-[11px] text-gray-400 whitespace-nowrap">
                 형식: <span className="font-mono text-gray-300">00년 00월 00일 ~ 00년 00월 00일</span>
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* 담당 에이전트 선택 드롭다운 */}
+              <div>
+                <label className="block text-[11px] font-bold text-gold mb-1.5 whitespace-nowrap flex items-center gap-1">
+                  <UserCheck className="w-3.5 h-3.5 text-gold" />
+                  담당 에이전트 <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  value={agent}
+                  onChange={(e) => setAgent(e.target.value)}
+                  className="w-full h-10 bg-black/50 border border-gold/40 rounded-lg px-3 text-sm text-white font-bold focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold transition-colors cursor-pointer"
+                >
+                  {AVAILABLE_AGENTS.map((a) => (
+                    <option key={a} value={a} className="bg-[#1a1d24] text-white">
+                      {a} 에이전트
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-[11px] font-semibold text-gray-400 mb-1.5 whitespace-nowrap">
                   계약 시작일
@@ -764,17 +832,23 @@ export function AddPlayerModal({
               </div>
             </div>
 
-            {/* 계약기간 포맷팅 실시간 미리보기 바 */}
-            <div className="bg-black/40 h-10 px-3.5 rounded-lg border border-white/5 flex items-center justify-between text-xs flex-wrap gap-2">
+            {/* 계약정보 및 담당 에이전트 실시간 미리보기 바 */}
+            <div className="bg-black/40 min-h-10 py-2 px-3.5 rounded-lg border border-white/5 flex items-center justify-between text-xs flex-wrap gap-2">
               <span className="text-gray-400 flex items-center gap-1.5 whitespace-nowrap">
                 <Clock className="w-3.5 h-3.5 text-gold" />
                 등록 시 표시 형태:
               </span>
-              <span className="font-mono font-bold text-white bg-gold/15 border border-gold/30 px-2.5 py-1 rounded text-[12px] whitespace-nowrap">
-                {contractStartDate && contractEndDate
-                  ? `${formatDateToKorean(contractStartDate)} ~ ${formatDateToKorean(contractEndDate)}`
-                  : "계약 날짜를 선택해주세요"}
-              </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gold/15 border border-gold/30 text-gold font-bold text-xs whitespace-nowrap">
+                  <UserCheck className="w-3 h-3 text-gold" />
+                  담당: {agent}
+                </span>
+                <span className="font-mono font-bold text-white bg-white/5 border border-white/10 px-2.5 py-1 rounded text-xs whitespace-nowrap">
+                  {contractStartDate && contractEndDate
+                    ? `${formatDateToKorean(contractStartDate)} ~ ${formatDateToKorean(contractEndDate)}`
+                    : "계약 날짜를 선택해주세요"}
+                </span>
+              </div>
             </div>
           </div>
         </div>

@@ -67,13 +67,13 @@ export async function generateAIReport(params: GenerateReportParams): Promise<st
   }
 
   const systemInstructionText = `당신은 KBO 리그 최고의 데이터 기반 야구 에이전트(Agent)입니다.
-제공된 선수의 포지션, 3개년 스탯, 그리고 세이버매트릭스 지표를 분석하여, 구단과의 연봉 협상 테이블에서 즉시 사용할 수 있는 '강력하고 설득력 있는 브리핑 문구'를 3~4문장으로 작성하십시오.
-1. 도입부: 선수의 포지션 희소성과 팀 내 핵심 기여도를 요약.
-2. 강점 부각: 우수한 세이버 지표(wRC+, WAR, CS% 등)를 1~2개 짚어 수치와 함께 어필.
-3. 약점 방어: 클래식 스탯이 낮더라도, 출루율이나 수비 기여도 등을 내세워 방어.
-4. 결론: 해당 선수가 필수 불가결한 코어 자원임을 강조하며 합리적인 연봉 인상의 타당성을 어필. (데이터 허위 사실 작성 금지)`;
+제공된 선수의 포지션, 3개년 스탯, 그리고 세이버매트릭스 지표를 분석하여, 구단과의 연봉 협상 테이블에서 즉시 사용할 수 있는 '강력하고 설득력 있는 심층 브리핑 리포트'를 작성하십시오.
+1. 도입부: 선수의 포지션 희소성과 팀 내 핵심 기여도 및 위상 요약.
+2. 강점 부각: 우수한 세이버 지표(wRC+, WAR, CS% 등)를 구체적인 수치 및 리그 내 지표와 함께 설득력 있게 어필.
+3. 약점 방어: 클래식 스탯이 낮더라도, 출루율이나 수비 기여도, 숨은 가치를 내세워 논리적으로 방어.
+4. 결론: 해당 선수가 필수 불가결한 코어 자원임을 강조하며 합리적인 연봉 인상의 타당성을 명확히 제시. (데이터 허위 사실 작성 금지, 글이 중간에 끊기지 않도록 문장을 끝까지 완결할 것)`;
 
-  const userPrompt = `이름: ${params.name}, 포지션: ${params.position}, 최근 3년 핵심 스탯 요약: ${JSON.stringify(params.history)}. 위 데이터를 바탕으로 구단 설득용 브리핑을 작성해 주세요.`;
+  const userPrompt = `이름: ${params.name}, 포지션: ${params.position}, 최근 3년 핵심 스탯 요약: ${JSON.stringify(params.history)}. 위 데이터를 바탕으로 구단 설득용 심층 브리핑을 완결성 있게 작성해 주세요.`;
 
   const requestBody = {
     systemInstruction: {
@@ -96,7 +96,7 @@ export async function generateAIReport(params: GenerateReportParams): Promise<st
     generationConfig: {
       temperature: 0.7,
       topP: 0.95,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 4096,
     },
   };
 

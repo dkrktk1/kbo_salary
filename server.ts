@@ -265,6 +265,47 @@ ${csvData}`);
   }
 });
 
+app.post("/api/db/save-player", async (req, res) => {
+  try {
+    const payload = req.body;
+    const GAS_DB_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+    
+    // Attempt sending to Google Apps Script from backend (Node.js avoids browser CORS errors)
+    let remoteSaved = false;
+    let details: string | undefined;
+
+    try {
+      const response = await fetch(GAS_DB_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain;charset=utf-8",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await response.text();
+      // Check if GAS returned an error page (e.g. doPost not found)
+      if (text.includes("doPost") || text.includes("エラー") || text.includes("Error") || !response.ok) {
+        details = "Google Apps Script does not have doPost implemented";
+      } else {
+        remoteSaved = true;
+      }
+    } catch (e: any) {
+      details = e.message;
+    }
+
+    res.json({
+      success: true,
+      remoteSaved,
+      details,
+      payload
+    });
+  } catch (error: any) {
+    console.error("Save Player API Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Internal server error" });
+  }
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

@@ -2,7 +2,12 @@ import { mockTeams } from "../data";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
 import { Users, TrendingUp, DollarSign, ShieldAlert, Award, PieChart as PieIcon } from "lucide-react";
 
-const COLORS = ['#E5A93C', '#F59E0B', '#3B82F6', '#10B981', '#8B5CF6'];
+// 투수(선명한 스카이블루) vs 타자(선명한 골드/앰버) 고대비 색상 적용
+const POSITION_COLORS: Record<string, string> = {
+  "투수": "#38BDF8", // 쿨 스카이블루
+  "타자": "#F59E0B", // 웜 골드/앰버
+};
+const DEFAULT_COLORS = ['#38BDF8', '#F59E0B', '#10B981', '#8B5CF6'];
 
 const formatCurrency = (value: number) => {
   const roundedValue = Math.round(value / 10000) * 10000;
@@ -62,53 +67,57 @@ export default function TeamAnalysis() {
           ];
 
           return (
-            <div key={team.id} className="bg-[#131722] border border-white/10 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+            <div key={team.id} className="bg-[#131722] border border-white/10 rounded-2xl p-5 md:p-6 shadow-xl flex flex-col gap-4">
               {/* 상단: 구단명 및 샐러리캡 여력 */}
               <div className="pb-3 border-b border-white/10">
-                <div className="flex justify-between items-start mb-3">
-                  <div>
-                    <h3 className="text-base font-bold text-white flex items-center gap-2">
-                      {team.name}
-                      <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${team.winNowMode ? 'bg-gold/15 text-gold border border-gold/30' : 'bg-white/5 text-gray-400 border border-white/10'}`}>
+                <div className="flex justify-between items-start mb-3 gap-2">
+                  <div className="whitespace-nowrap">
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2.5 whitespace-nowrap">
+                      <span>{team.name}</span>
+                      <span className={`px-2.5 py-1 rounded-md text-xs font-bold whitespace-nowrap ${team.winNowMode ? 'bg-gold/15 text-gold border border-gold/30' : 'bg-white/5 text-gray-400 border border-white/10'}`}>
                         {team.winNowMode ? "윈나우 (우승 도전)" : "리빌딩 (육성 체제)"}
                       </span>
                     </h3>
                   </div>
-                  <div className="text-right">
-                    <p className="text-[11px] text-gray-400 font-bold uppercase tracking-wider">여유 금액 (Cap Margin)</p>
-                    <p className="text-sm font-bold font-mono text-emerald-400">₩{formatCurrency(capSpace > 0 ? capSpace : 0)}</p>
+                  <div className="text-right whitespace-nowrap flex-shrink-0">
+                    <p className="text-xs text-gray-400 font-bold uppercase tracking-wider whitespace-nowrap">여유 금액 (Cap Margin)</p>
+                    <p className="text-base font-bold font-mono text-emerald-400 whitespace-nowrap">₩{formatCurrency(capSpace > 0 ? capSpace : 0)}</p>
                   </div>
                 </div>
 
                 <div>
-                  <div className="flex justify-between text-xs font-mono font-medium text-gray-400 mb-1.5">
-                    <span className="flex items-center gap-1 text-gray-300">
-                      소진율 <strong className={capUsagePercent > 95 ? "text-red-400" : "text-gold"}>{capUsagePercent.toFixed(1)}%</strong>
+                  <div className="flex justify-between text-sm font-mono font-medium text-gray-300 mb-1.5 whitespace-nowrap gap-2">
+                    <span className="flex items-center gap-1.5 text-gray-200 whitespace-nowrap">
+                      소진율 <strong className={capUsagePercent > 95 ? "text-red-400 font-bold" : "text-gold font-bold"}>{capUsagePercent.toFixed(1)}%</strong>
                     </span>
-                    <span>상한액 ₩{formatCurrency(team.salaryCap)}</span>
+                    <span className="text-gray-300 font-medium whitespace-nowrap">상한액 ₩{formatCurrency(team.salaryCap)}</span>
                   </div>
-                  <div className="w-full bg-black/60 rounded-full h-2.5 border border-white/10 overflow-hidden">
+                  <div className="w-full bg-black/60 rounded-full h-3 border border-white/10 overflow-hidden">
                     <div 
                       className={`h-full rounded-full transition-all duration-500 ${capUsagePercent > 95 ? 'bg-gradient-to-r from-amber-500 to-red-500' : 'bg-gradient-to-r from-amber-500 to-gold'}`} 
                       style={{ width: `${Math.min(capUsagePercent, 100)}%` }}
                     />
                   </div>
-                  <div className="flex justify-between items-center text-[11px] text-gray-500 mt-1.5 font-mono">
-                    <span>산정대상 연봉: ₩{formatCurrency(team.currentPayroll)}</span>
-                    <span>잔여 Cap: {capSpace > 0 ? `+${(capSpace / 100000000).toFixed(1)}억` : '초과'}</span>
+                  {/* 산정대상 연봉 글자 색상을 상한액과 동일한 text-gray-300, 폰트 크기 증가(text-xs/text-sm) */}
+                  <div className="flex justify-between items-center text-xs text-gray-300 mt-2 font-mono font-medium whitespace-nowrap gap-2">
+                    <span className="text-gray-300 whitespace-nowrap">산정대상 연봉: <strong className="text-white font-bold whitespace-nowrap">₩{formatCurrency(team.currentPayroll)}</strong></span>
+                    <span className={`whitespace-nowrap font-bold ${capSpace > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      잔여 Cap: {capSpace > 0 ? `+${(capSpace / 100000000).toFixed(1)}억` : '초과'}
+                    </span>
                   </div>
                 </div>
               </div>
 
               {/* 중단: 투타별 예산 분배 */}
-              <div className="bg-black/30 rounded-xl border border-white/5 p-3.5 flex flex-col justify-center">
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-xs font-bold text-gray-400 flex items-center gap-1.5">
-                    <PieIcon className="w-3.5 h-3.5 text-gold" />
-                    포지션별 예산 분배
+              <div className="bg-black/30 rounded-xl border border-white/5 p-4 flex flex-col justify-center">
+                <div className="flex items-center justify-between mb-3 whitespace-nowrap">
+                  <h4 className="text-sm font-bold text-gray-300 flex items-center gap-1.5 whitespace-nowrap">
+                    <PieIcon className="w-4 h-4 text-gold flex-shrink-0" />
+                    <span>포지션별 예산 분배</span>
                   </h4>
                 </div>
-                <div className="flex items-center justify-center gap-4">
+                {/* 도넛 그래프와 뱃지를 중앙 배치 & 1줄 강제 유지 (whitespace-nowrap) */}
+                <div className="flex items-center justify-center gap-4 sm:gap-6 py-1">
                   <div className="w-[110px] h-[110px] flex-shrink-0">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
@@ -117,33 +126,42 @@ export default function TeamAnalysis() {
                           cx="50%"
                           cy="50%"
                           innerRadius={28}
-                          outerRadius={50}
+                          outerRadius={52}
                           paddingAngle={3}
                           dataKey="value"
                           stroke="rgba(0,0,0,0.5)"
                           strokeWidth={2}
                         >
-                          {posData.map((_, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
+                          {posData.map((entry, index) => {
+                            const color = POSITION_COLORS[entry.name] || DEFAULT_COLORS[index % DEFAULT_COLORS.length];
+                            return <Cell key={`cell-${index}`} fill={color} />;
+                          })}
                         </Pie>
                         <Tooltip 
                           formatter={(val: any) => formatCurrency(Number(val))} 
-                          contentStyle={{ backgroundColor: '#131722', borderColor: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: '10px', fontSize: '12px' }} 
+                          contentStyle={{ backgroundColor: '#131722', borderColor: 'rgba(255,255,255,0.15)', color: '#fff', borderRadius: '10px', fontSize: '13px' }} 
                         />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
-                  <div className="flex flex-col gap-1.5 flex-1 text-xs">
-                    {posData.map((entry, index) => (
-                      <div key={index} className="flex items-center justify-between bg-black/40 px-2.5 py-1.5 rounded-lg border border-white/5">
-                        <div className="flex items-center gap-1.5">
-                          <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
-                          <span className="text-gray-300 font-medium">{entry.name} ({entry.percent}%)</span>
+                  {/* 투수, 타자 비율 뱃지: 항상 가로 1줄로 표시되도록 충분한 너비와 whitespace-nowrap 보장 */}
+                  <div className="flex flex-col gap-2.5 flex-1 max-w-[270px]">
+                    {posData.map((entry, index) => {
+                      const color = POSITION_COLORS[entry.name] || DEFAULT_COLORS[index % DEFAULT_COLORS.length];
+                      return (
+                        <div 
+                          key={index} 
+                          className="flex items-center justify-between gap-2.5 sm:gap-3 bg-black/40 px-3.5 py-2 rounded-xl border border-white/5 hover:border-white/15 transition-colors shadow-sm whitespace-nowrap"
+                        >
+                          <div className="flex items-center gap-2 whitespace-nowrap flex-shrink-0">
+                            <div className="w-3 h-3 rounded-full shadow-sm flex-shrink-0" style={{ backgroundColor: color }} />
+                            <span className="text-gray-100 font-bold text-sm whitespace-nowrap">{entry.name}</span>
+                            <span className="text-xs font-mono font-medium text-gray-400 whitespace-nowrap">({entry.percent}%)</span>
+                          </div>
+                          <span className="font-mono font-bold text-white text-sm whitespace-nowrap ml-auto">{formatCurrency(entry.value)}</span>
                         </div>
-                        <span className="font-mono font-bold text-white">{formatCurrency(entry.value)}</span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </div>

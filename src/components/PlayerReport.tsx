@@ -20,7 +20,9 @@ import {
   Check,
   AlertCircle,
   ShieldAlert,
-  FastForward
+  FastForward,
+  BarChart2,
+  X
 } from "lucide-react";
 import { 
   Radar, 
@@ -32,11 +34,11 @@ import {
   Tooltip as RechartsTooltip,
   Legend
 } from "recharts";
-import { fetchPlayerFromDatabase, GAS_DB_URL } from "../services/dbService";
+import { fetchPlayerFromDatabase, GAS_DB_URL, parsePlayerAge } from "../services/dbService";
 import { 
   ApiPlayerStat, 
   KBO_TEAMS, 
-  QUICK_SEARCH_PRESETS,
+  QUICK_SEARCH_PRESETS, 
   PositionGroup, 
   detectPositionGroup, 
   getPositionGroupLabel,
@@ -44,10 +46,12 @@ import {
   POSITION_AXES,
   POSITION_COMP_PLAYERS,
   ALL_COMP_PLAYERS,
+  LEAGUE_AVERAGE_COMP,
   CompPlayerDef,
   extractRawPlayerStatForAxis,
   normalizeRawToApiStat,
-  extractHistoryFromRawItems
+  extractHistoryFromRawItems,
+  getValue
 } from "../types";
 import { PercentileBarItem } from "./PercentileBarItem";
 import { SearchableCompSelect } from "./SearchableCompSelect";
@@ -57,6 +61,174 @@ import { generateAIReport, getStoredApiKey, hasApiKey } from "../services/gemini
 interface PlayerReportProps {
   initialPlayerName?: string;
   initialTeam?: string;
+}
+
+// 주요 KBO 선수 공식 신장/체중 사전 (DB에 해당 컬럼이 없거나 누락된 경우 정밀 보완)
+const KBO_PHYSIQUE_LOOKUP: Record<string, string> = {
+  "손성빈": "186cm / 94kg",
+  "양의지": "179cm / 93kg",
+  "강민호": "185cm / 102kg",
+  "박동원": "179cm / 92kg",
+  "김형준": "187cm / 92kg",
+  "장성우": "187cm / 100kg",
+  "이지영": "178cm / 86kg",
+  "최재훈": "178cm / 85kg",
+  "김태군": "182cm / 95kg",
+  "유강남": "183cm / 90kg",
+  "정보근": "177cm / 85kg",
+  "안중열": "175cm / 85kg",
+  "조형우": "185cm / 95kg",
+  "신범수": "181cm / 85kg",
+  "한준수": "184cm / 93kg",
+  "김기연": "178cm / 88kg",
+  "이재원": "185cm / 100kg",
+  "김준태": "176cm / 90kg",
+  "박세혁": "181cm / 88kg",
+  "김민식": "180cm / 85kg",
+  "이정후": "185cm / 86kg",
+  "김도영": "182cm / 85kg",
+  "문동주": "188cm / 98kg",
+  "원태인": "183cm / 92kg",
+  "곽빈": "187cm / 95kg",
+  "안우진": "191cm / 90kg",
+  "노시환": "185cm / 105kg",
+  "구자욱": "189cm / 85kg",
+  "김혜성": "182cm / 84kg",
+  "박해민": "182cm / 77kg",
+  "김현수": "188cm / 100kg",
+  "최정": "180cm / 90kg",
+  "나성범": "183cm / 100kg",
+  "김광현": "188cm / 88kg",
+  "류현진": "190cm / 113kg",
+  "고영표": "187cm / 88kg",
+  "박영현": "183cm / 90kg",
+  "정우영": "193cm / 85kg",
+  "황재균": "183cm / 96kg",
+  "오지환": "186cm / 82kg",
+  "박건우": "184cm / 86kg",
+  "전준우": "180cm / 95kg",
+  "정수빈": "177cm / 78kg",
+  "채은성": "186cm / 92kg",
+  "손아섭": "174cm / 84kg",
+  "박민우": "180cm / 81kg"
+};
+
+/**
+ * 선수 요약 프로필 (나이, 연봉, 등록일수, 신장/체중) 추출 함수
+ */
+function extractProfileSummary(records: any[], playerName: string): {
+  age: string;
+  salary: string;
+  serviceTime: string;
+  physique: string;
+} {
+  let foundAgeRaw: any = undefined;
+  let foundSalaryRaw: any = undefined;
+  let foundServiceRaw: any = undefined;
+  let foundPhysiqueRaw: any = undefined;
+
+  for (const r of records) {
+    if (r && typeof r === "object") {
+      if (foundAgeRaw === undefined && (r["나이"] || r.age || r["생년월일"] || r.birth)) {
+        foundAgeRaw = r["나이"] || r.age || r["생년월일"] || r.birth;
+      }
+      if (foundSalaryRaw === undefined) {
+        const sal = r["현재 연봉"] ?? r["현재연봉"] ?? r["연봉"] ?? r.salary;
+        if (sal !== undefined && sal !== null && sal !== "" && sal !== 0 && sal !== "0") {
+          foundSalaryRaw = sal;
+        }
+      }
+      if (foundServiceRaw === undefined) {
+        const st = r["등록일수"] ?? r["총등록일수"] ?? r.serviceTime;
+        if (st !== undefined && st !== null && st !== "" && st !== "0" && st !== 0) {
+          foundServiceRaw = st;
+        }
+      }
+      if (foundPhysiqueRaw === undefined) {
+        const phy = r["신장/체중"] ?? r["신체"] ?? r["체격"] ?? r.physique;
+        if (phy && String(phy).trim()) {
+          foundPhysiqueRaw = String(phy).trim();
+        } else {
+          const h = r["신장"] ?? r["키"] ?? r.height;
+          const w = r["체중"] ?? r["몸무게"] ?? r.weight;
+          if (h && w) {
+            foundPhysiqueRaw = `${String(h).replace(/cm/i, "").trim()}cm / ${String(w).replace(/kg/i, "").trim()}kg`;
+          }
+        }
+      }
+    }
+  }
+
+  // 1. 나이 포맷팅
+  let formattedAge = "데이터 없음";
+  if (foundAgeRaw !== undefined && foundAgeRaw !== null && foundAgeRaw !== "") {
+    const ageNum = parsePlayerAge(foundAgeRaw);
+    if (ageNum > 0 && ageNum < 90) {
+      formattedAge = `만 ${ageNum}세`;
+    } else {
+      const parsedNum = parseInt(String(foundAgeRaw), 10);
+      if (!isNaN(parsedNum) && parsedNum > 10 && parsedNum < 90) {
+        formattedAge = `만 ${parsedNum}세`;
+      }
+    }
+  }
+
+  // 2. 연봉 포맷팅 (만원 단위 기준)
+  let formattedSalary = "데이터 없음";
+  if (foundSalaryRaw !== undefined && foundSalaryRaw !== null && foundSalaryRaw !== "") {
+    const num = typeof foundSalaryRaw === "number" 
+      ? foundSalaryRaw 
+      : parseFloat(String(foundSalaryRaw).replace(/[^0-9.-]/g, ""));
+    if (!isNaN(num) && num > 0) {
+      // 10000000 이상(원 단위)이면 만원 단위로 변환
+      const manwon = num >= 10000000 ? Math.round(num / 10000) : Math.round(num);
+      if (manwon >= 10000) {
+        const eok = Math.floor(manwon / 10000);
+        const rest = manwon % 10000;
+        if (rest > 0) {
+          formattedSalary = `${eok}억 ${rest.toLocaleString()}만원`;
+        } else {
+          formattedSalary = `${eok}억원`;
+        }
+      } else {
+        formattedSalary = `${manwon.toLocaleString()}만원`;
+      }
+    }
+  }
+
+  // 3. 등록일수 포맷팅 (KBO 1군 1시즌 = 145일 기준)
+  let formattedService = "데이터 없음";
+  if (foundServiceRaw !== undefined && foundServiceRaw !== null && foundServiceRaw !== "") {
+    const num = typeof foundServiceRaw === "number" 
+      ? foundServiceRaw 
+      : parseInt(String(foundServiceRaw).replace(/[^0-9]/g, ""), 10);
+    if (!isNaN(num) && num >= 0) {
+      if (num >= 145) {
+        const years = Math.floor(num / 145);
+        const remainDays = num % 145;
+        formattedService = `${years}년 ${remainDays}일 (${num}일)`;
+      } else {
+        formattedService = `${num}일`;
+      }
+    } else if (typeof foundServiceRaw === "string" && foundServiceRaw.trim()) {
+      formattedService = foundServiceRaw.trim();
+    }
+  }
+
+  // 4. 신장/체중 포맷팅 (DB 데이터 우선 -> lookup 테이블 -> "데이터 없음")
+  let formattedPhysique = "데이터 없음";
+  if (foundPhysiqueRaw) {
+    formattedPhysique = foundPhysiqueRaw;
+  } else if (playerName && KBO_PHYSIQUE_LOOKUP[playerName.trim()]) {
+    formattedPhysique = KBO_PHYSIQUE_LOOKUP[playerName.trim()];
+  }
+
+  return {
+    age: formattedAge,
+    salary: formattedSalary,
+    serviceTime: formattedService,
+    physique: formattedPhysique
+  };
 }
 
 /**
@@ -84,7 +256,7 @@ const CustomRadarTooltip = ({ active, payload, currentSearchedName }: any) => {
           const isMain = entry.dataKey === currentSearchedName || index === 0;
           const rawFormatted = isMain ? currentItem._mainRawFormatted : currentItem._compRawFormatted;
           const score = typeof entry.value === "number" ? entry.value : 0;
-          const color = isMain ? "#ffb700" : "#4dabf7";
+          const color = isMain ? "#ffb700" : (playerName?.includes("리그 평균") ? "#38d9a9" : "#4dabf7");
 
           return (
             <div key={`radar-tt-${index}`} className="flex flex-col gap-0.5">
@@ -127,10 +299,19 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
   // 검색 결과 여부 (초기화면 / 결과화면 조건부 렌더링용)
   const [hasData, setHasData] = useState<boolean>(false);
 
+  // 선수 프로필 요약 정보 (나이, 연봉, 등록일수, 신장/체중)
+  const [playerProfile, setPlayerProfile] = useState<{
+    age: string;
+    salary: string;
+    serviceTime: string;
+    physique: string;
+  } | null>(null);
+
   // 상태 플래그
   const [isFetchingApi, setIsFetchingApi] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  const [selectedCompId, setSelectedCompId] = useState<string>("comp_kmh");
+  const [selectedCompId, setSelectedCompId] = useState<string>("comp_league_avg");
+  const [comparisonPool, setComparisonPool] = useState<CompPlayerDef[]>([]);
 
   // AI 리포트 및 Gemini API Key 연동 상태
   const [report, setReport] = useState<string>("");
@@ -161,8 +342,9 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
     setIsTyping(true);
 
     let index = 0;
-    const step = 2; // 한 틱당 2자씩 출력
-    const intervalMs = 25; // 25ms 간격
+    // 긴 글도 중간에 멈춘 것처럼 답답하지 않도록 글자수에 따른 동적 스텝 적용
+    const step = fullText.length > 800 ? 6 : (fullText.length > 400 ? 4 : 2);
+    const intervalMs = 20;
 
     typingTimerRef.current = setInterval(() => {
       index += step;
@@ -176,7 +358,7 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
     }, intervalMs);
   };
 
-  // 타이핑 즉시 완료
+  // 타이핑 즉시 완료 (전체 내용 즉시 표시)
   const handleSkipTyping = () => {
     if (typingTimerRef.current) {
       clearInterval(typingTimerRef.current);
@@ -184,6 +366,15 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
     setTypedReport(report);
     setIsTyping(false);
   };
+
+  // 컴포넌트 언마운트 시 타이머 정리
+  useEffect(() => {
+    return () => {
+      if (typingTimerRef.current) {
+        clearInterval(typingTimerRef.current);
+      }
+    };
+  }, []);
 
   // 리포트 텍스트 복사
   const handleCopyReport = async () => {
@@ -215,6 +406,20 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
       // 1. 공통 DB 서비스 호출 (history 배열 및 다양한 키 자동 정규화)
       const dbResult = await fetchPlayerFromDatabase(trimmedName, targetTeam);
 
+      // [요청 사항 1] API 응답 데이터 강제 로깅 (디버깅)
+      const history = (dbResult.records && dbResult.records.length > 0)
+        ? dbResult.records
+        : [];
+      if (history.length > 0 && history[0]) {
+        console.log("API에서 넘어온 1개년도 원본 데이터 키 목록:", Object.keys(history[0]));
+        console.log("API 원본 첫 번째 객체 상세:", history[0]);
+        const defenseRec = history.find((h: any) => String(h?.부문 || "").includes("수비"));
+        if (defenseRec) {
+          console.log("API에서 넘어온 [수비] 부문 데이터 키 목록:", Object.keys(defenseRec));
+          console.log("API [수비] 부문 데이터 객체 상세:", defenseRec);
+        }
+      }
+
       if (dbResult.success && dbResult.records && dbResult.records.length > 0) {
         const historyData = extractHistoryFromRawItems(dbResult.records, trimmedName);
 
@@ -232,6 +437,14 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
         setCurrentSearchedTeam(resolvedTeam);
         setCurrentPosition(resolvedPos);
         setHasData(true);
+
+        // 선수 프로필 요약 정보 (나이, 연봉, 등록일수, 신장/체중) 추출 및 설정
+        const allRecords = [...(dbResult.records || [])];
+        if (dbResult.stat2024) allRecords.push(dbResult.stat2024);
+        if (dbResult.stat2025) allRecords.push(dbResult.stat2025);
+        if (dbResult.stat2026) allRecords.push(dbResult.stat2026);
+        setPlayerProfile(extractProfileSummary(allRecords, trimmedName));
+
         setReport(`Google 스프레드시트 DB로부터 '${resolvedTeam ? `${resolvedTeam} ` : ""}${trimmedName}' 선수의 포지션(${resolvedPos}) 및 3개년(2024~2026) 핵심 지표가 성공적으로 동기화되었습니다.`);
       } else {
         // 2. 직접 GAS URL로 2차 시도 (history 배열 파싱)
@@ -255,6 +468,10 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
             setCurrentSearchedTeam(resolvedTeam);
             setCurrentPosition(resolvedPos);
             setHasData(true);
+
+            // 선수 프로필 요약 정보 추출 및 설정
+            setPlayerProfile(extractProfileSummary(items, trimmedName));
+
             setReport(`Google 스프레드시트 DB로부터 '${resolvedTeam ? `${resolvedTeam} ` : ""}${trimmedName}' 선수의 포지션(${resolvedPos}) 및 3개년(2024~2026) 성적이 성공적으로 동기화되었습니다.`);
             return;
           }
@@ -264,6 +481,7 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
         setStat2024(null);
         setStat2025(null);
         setStat2026(null);
+        setPlayerProfile(null);
         setHasData(false);
         setApiError(`구글 스프레드시트 DB에 '${targetTeam ? `${targetTeam} ` : ""}${trimmedName}' 선수의 데이터가 존재하지 않습니다.`);
       }
@@ -272,6 +490,7 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
       setStat2024(null);
       setStat2025(null);
       setStat2026(null);
+      setPlayerProfile(null);
       setHasData(false);
       setApiError(`데이터베이스 통신 오류: ${err.message || "네트워크 연결을 확인해주세요."}`);
     } finally {
@@ -288,6 +507,7 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
     setNameInput("");
     setTeamInput("");
     setHasData(false);
+    setPlayerProfile(null);
     setApiError(null);
     setStat2024(null);
     setStat2025(null);
@@ -310,19 +530,46 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
     return list.filter(p => p.name.trim().toLowerCase() !== trimmedMain);
   }, [positionGroup, currentSearchedName]);
 
-  // 포지션 그룹이나 메인 선수가 바뀌었을 때 적절한 비교 선수 자동 지정
+  // 비교 후보 풀 관리: '리그 평균'은 기본 항목으로 항상 첫 번째에 배치
   useEffect(() => {
+    const leagueAvg = LEAGUE_AVERAGE_COMP[positionGroup] || LEAGUE_AVERAGE_COMP.catcher;
     const trimmedMain = (currentSearchedName || "").trim().toLowerCase();
-    const currentSelected = ALL_COMP_PLAYERS.find(p => p.id === selectedCompId);
+    const recommended = currentCompPlayers.find(p => p.name.trim().toLowerCase() !== trimmedMain) || currentCompPlayers[0];
 
-    // 현재 선택된 비교 선수가 메인 선수와 같거나 유효하지 않은 경우
-    if (!currentSelected || currentSelected.name.trim().toLowerCase() === trimmedMain) {
-      const fallback = currentCompPlayers[0] || ALL_COMP_PLAYERS.find(p => p.name.trim().toLowerCase() !== trimmedMain);
-      if (fallback) {
-        setSelectedCompId(fallback.id);
+    setComparisonPool(prev => {
+      // 기존에 등록된 선수 중 메인 선수와 동일하거나 리그 평균인 항목 정리
+      const userAdded = prev.filter(p => p.id !== "comp_league_avg" && p.name.trim().toLowerCase() !== trimmedMain);
+
+      // 등록된 후보가 없다면 기본 추천 선수 1명을 함께 포함하여 [리그 평균, 추천 선수]로 초기화
+      if (userAdded.length === 0 && recommended) {
+        return [leagueAvg, recommended];
       }
-    }
-  }, [positionGroup, currentCompPlayers, currentSearchedName, selectedCompId]);
+      return [leagueAvg, ...userAdded];
+    });
+  }, [positionGroup, currentSearchedName, currentCompPlayers]);
+
+  // 비교 대상 추가 및 차트 선택 핸들러
+  const handleSelectOrAddCompPlayer = (player: CompPlayerDef) => {
+    setComparisonPool(prev => {
+      const exists = prev.some(p => p.id === player.id);
+      if (exists) return prev;
+      return [...prev, player];
+    });
+    setSelectedCompId(player.id);
+  };
+
+  // 비교 대상 후보 삭제 핸들러 (리그 평균은 기본 필수 항목이므로 삭제 불가)
+  const handleRemoveCompPlayer = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (id === "comp_league_avg") return;
+    setComparisonPool(prev => {
+      const next = prev.filter(p => p.id !== id);
+      if (selectedCompId === id) {
+        setSelectedCompId("comp_league_avg");
+      }
+      return next;
+    });
+  };
 
   // 초기 파라미터가 있을 때만 자동 로드
   useEffect(() => {
@@ -336,23 +583,25 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
     return stat2026 || stat2025 || stat2024;
   }, [stat2026, stat2025, stat2024]);
 
-  // 선택된 비교 선수 객체 (메인 선수와 중복 방지)
+  // 선택된 비교 선수 객체 (리그 평균 또는 풀/전체에서 조회)
   const selectedCompPlayer = useMemo(() => {
-    const trimmedMain = (currentSearchedName || "").trim().toLowerCase();
-    let player = ALL_COMP_PLAYERS.find(p => p.id === selectedCompId) || currentCompPlayers[0];
-    
-    // 만약 여전히 메인 선수와 동일한 이름이면 다른 선수로 교체
-    if (player && player.name.trim().toLowerCase() === trimmedMain) {
-      player = currentCompPlayers.find(p => p.name.trim().toLowerCase() !== trimmedMain) || 
-               ALL_COMP_PLAYERS.find(p => p.name.trim().toLowerCase() !== trimmedMain) || 
-               player;
+    if (selectedCompId === "comp_league_avg") {
+      return LEAGUE_AVERAGE_COMP[positionGroup] || LEAGUE_AVERAGE_COMP.catcher;
     }
-    return player;
-  }, [selectedCompId, currentCompPlayers, currentSearchedName]);
+    const inPool = comparisonPool.find(p => p.id === selectedCompId);
+    if (inPool) return inPool;
+
+    const inAll = ALL_COMP_PLAYERS.find(p => p.id === selectedCompId);
+    if (inAll) return inAll;
+
+    return LEAGUE_AVERAGE_COMP[positionGroup] || LEAGUE_AVERAGE_COMP.catcher;
+  }, [selectedCompId, comparisonPool, positionGroup]);
 
   // 레이더 차트 동적 6개 축 데이터 계산
   const radarChartData = useMemo(() => {
     const axes = POSITION_AXES[positionGroup] || POSITION_AXES.catcher;
+    const mainName = currentSearchedName || "검색 선수";
+    const compName = selectedCompPlayer?.name || "비교 대상";
     
     return axes.map(axis => {
       const mainRaw = extractRawPlayerStatForAxis(latestStat, axis.key);
@@ -364,8 +613,8 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
       return {
         subject: axis.subject,
         key: axis.key,
-        [currentSearchedName || "검색 선수"]: mainScore,
-        [selectedCompPlayer?.name || "비교 선수"]: compScore,
+        [mainName]: mainScore,
+        [compName]: compScore,
         _mainRawFormatted: axis.formatRaw(mainRaw),
         _compRawFormatted: axis.formatRaw(compRaw),
         _axisConfig: axis
@@ -491,10 +740,10 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
         return (
           <>
             <th className="py-2.5 px-3 text-center text-xs font-semibold text-gold">도루저지율 (CS%)</th>
-            <th className="py-2.5 px-3 text-center text-xs font-semibold text-gray-300">블로킹 (PB/9)</th>
+            <th className="py-2.5 px-3 text-center text-xs font-semibold text-white">Pass/9</th>
             <th className="py-2.5 px-3 text-center text-xs font-semibold text-gold">OPS</th>
-            <th className="py-2.5 px-3 text-center text-xs font-semibold text-gray-300">wRC+</th>
-            <th className="py-2.5 px-3 text-center text-xs font-semibold text-gray-300">수비 이닝</th>
+            <th className="py-2.5 px-3 text-center text-xs font-semibold text-white">wRC+</th>
+            <th className="py-2.5 px-3 text-center text-xs font-semibold text-white">수비 이닝</th>
             <th className="py-2.5 px-3 text-center text-xs font-semibold text-emerald-400">WAR</th>
           </>
         );
@@ -511,99 +760,180 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
       );
     }
 
+    const row: any = stat;
+
     if (positionGroup === "pitcher") {
-      const era = formatStatValue(stat.ERA, "number2");
-      const fip = formatStatValue(stat.FIP, "number2");
-      const k9 = formatStatValue(stat["K/9"], "number2");
-      const bb9 = formatStatValue(stat["BB/9"], "number2");
-      const lob = formatStatValue(stat["LOB%"], "percent");
-      const ip = formatStatValue(stat.IP, "number1");
-      const war = formatStatValue(stat.WAR, "number2");
+      const eraValue = getValue(row, ['ERA', '평균자책점', '방어율']) ?? '데이터 없음';
+      const fipValue = getValue(row, ['FIP', '수비무관평자']) ?? '데이터 없음';
+      const k9Value = getValue(row, ['K/9', '탈삼진/9', 'SO/9']) ?? '데이터 없음';
+      const bb9Value = getValue(row, ['BB/9', '볼넷/9']) ?? '데이터 없음';
+      const lobValue = getValue(row, ['LOB%', '잔루율', 'LOB']) ?? '데이터 없음';
+      // 3. 투수 IP vs 수비 IP 충돌 예외 처리: 투수는 PIT_IP 우선
+      const ipValue = getValue(row, ['PIT_IP', '투수이닝', '투수 이닝']) 
+        ?? (row.pitcherRecord ? getValue(row.pitcherRecord, ['IP', 'PIT_IP', '투수이닝']) : undefined)
+        ?? getValue(row, ['IP', '이닝']) ?? '데이터 없음';
+      const warValue = getValue(row, ['WAR', '핵심 스탯(WAR)', '핵심스탯(WAR)']) ?? '데이터 없음';
+
+      const warNum = typeof warValue === 'number' ? warValue : parseFloat(String(warValue));
+      const displayWar = !isNaN(warNum) ? warNum.toFixed(1) : warValue;
 
       return (
         <>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${era.isNoData ? "text-gray-500" : "text-white font-semibold"}`}>{era.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${fip.isNoData ? "text-gray-500" : "text-gray-200"}`}>{fip.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${k9.isNoData ? "text-gray-500" : "text-gray-200"}`}>{k9.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${bb9.isNoData ? "text-gray-500" : "text-gray-200"}`}>{bb9.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${lob.isNoData ? "text-gray-500 font-normal" : "text-gold"}`}>{lob.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${ip.isNoData ? "text-gray-500 font-normal" : "text-gold"}`}>{ip.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono font-extrabold ${war.isNoData ? "text-gray-500 font-normal" : "text-emerald-400"}`}>{war.text}</td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${eraValue === '데이터 없음' ? "text-gray-500" : "text-white font-semibold"}`}>
+            {eraValue !== '데이터 없음' && typeof eraValue === 'number' ? eraValue.toFixed(2) : eraValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${fipValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {fipValue !== '데이터 없음' && typeof fipValue === 'number' ? fipValue.toFixed(2) : fipValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${k9Value === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {k9Value !== '데이터 없음' && typeof k9Value === 'number' ? k9Value.toFixed(2) : k9Value}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${bb9Value === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {bb9Value !== '데이터 없음' && typeof bb9Value === 'number' ? bb9Value.toFixed(2) : bb9Value}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${lobValue === '데이터 없음' ? "text-gray-500 font-normal" : "text-gold"}`}>
+            {lobValue !== '데이터 없음' ? (typeof lobValue === 'number' ? (lobValue > 0 && lobValue <= 1 ? `${(lobValue * 100).toFixed(1)}%` : `${lobValue}%`) : lobValue) : lobValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${ipValue === '데이터 없음' ? "text-gray-500 font-normal" : "text-gold"}`}>
+            {ipValue !== '데이터 없음' && typeof ipValue === 'number' ? (Number.isInteger(ipValue) ? `${ipValue}.0` : ipValue) : ipValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono font-extrabold ${displayWar === '데이터 없음' ? "text-gray-500 font-normal" : "text-emerald-400"}`}>
+            {displayWar}
+          </td>
         </>
       );
     }
 
     if (positionGroup === "infield") {
-      const ops = formatStatValue(stat.OPS, "number3");
-      const wrc = formatStatValue(stat["wRC+"], "integer");
-      const iso = formatStatValue(stat.ISO, "number3");
-      const bbk = formatStatValue(stat["BB/K"], "number2");
-      const rf9 = formatStatValue(stat.RF9, "number2");
-      const dp = formatStatValue(stat.DP, "integer");
-      const war = formatStatValue(stat.WAR, "number2");
+      const opsValue = getValue(row, ['OPS', '출루율+장타율']) ?? '데이터 없음';
+      const wrcValue = getValue(row, ['wRC+', 'WRC+', 'wrc+']) ?? '데이터 없음';
+      const isoValue = getValue(row, ['ISO', '순수장타율']) ?? '데이터 없음';
+      const bbkValue = getValue(row, ['BB/K', '선구안']) ?? '데이터 없음';
+      const rf9Value = getValue(row, ['RF9', 'RF/9', '수비범위']) ?? '데이터 없음';
+      const dpValue = getValue(row, ['DP', '병살', '병살처리']) ?? '데이터 없음';
+      const warValue = getValue(row, ['WAR', '핵심 스탯(WAR)', '핵심스탯(WAR)']) ?? '데이터 없음';
+      const warNum = typeof warValue === 'number' ? warValue : parseFloat(String(warValue));
+      const displayWar = !isNaN(warNum) ? warNum.toFixed(1) : warValue;
 
       return (
         <>
-          <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${ops.isNoData ? "text-gray-500 font-normal" : "text-gold"}`}>{ops.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${wrc.isNoData ? "text-gray-500" : "text-gray-200"}`}>{wrc.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${iso.isNoData ? "text-gray-500" : "text-gray-200"}`}>{iso.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${bbk.isNoData ? "text-gray-500" : "text-gray-200"}`}>{bbk.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${rf9.isNoData ? "text-gray-500" : "text-gray-200"}`}>{rf9.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${dp.isNoData ? "text-gray-500" : "text-gray-200"}`}>{dp.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono font-extrabold ${war.isNoData ? "text-gray-500 font-normal" : "text-emerald-400"}`}>{war.text}</td>
+          <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${opsValue === '데이터 없음' ? "text-gray-500 font-normal" : "text-gold"}`}>
+            {opsValue !== '데이터 없음' && typeof opsValue === 'number' ? opsValue.toFixed(3) : opsValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${wrcValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {wrcValue !== '데이터 없음' && typeof wrcValue === 'number' ? Math.round(wrcValue) : wrcValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${isoValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {isoValue !== '데이터 없음' && typeof isoValue === 'number' ? isoValue.toFixed(3) : isoValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${bbkValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {bbkValue !== '데이터 없음' && typeof bbkValue === 'number' ? bbkValue.toFixed(2) : bbkValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${rf9Value === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {rf9Value !== '데이터 없음' && typeof rf9Value === 'number' ? rf9Value.toFixed(2) : rf9Value}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${dpValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {dpValue !== '데이터 없음' && typeof dpValue === 'number' ? Math.round(dpValue) : dpValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono font-extrabold ${displayWar === '데이터 없음' ? "text-gray-500 font-normal" : "text-emerald-400"}`}>
+            {displayWar}
+          </td>
         </>
       );
     }
 
     if (positionGroup === "outfield") {
-      const ops = formatStatValue(stat.OPS, "number3");
-      const wrc = formatStatValue(stat["wRC+"], "integer");
-      const iso = formatStatValue(stat.ISO, "number3");
-      const bbk = formatStatValue(stat["BB/K"], "number2");
-      const rf9 = formatStatValue(stat.RF9, "number2");
-      const a = formatStatValue(stat.A, "integer");
-      const war = formatStatValue(stat.WAR, "number2");
+      const opsValue = getValue(row, ['OPS', '출루율+장타율']) ?? '데이터 없음';
+      const wrcValue = getValue(row, ['wRC+', 'WRC+', 'wrc+']) ?? '데이터 없음';
+      const isoValue = getValue(row, ['ISO', '순수장타율']) ?? '데이터 없음';
+      const bbkValue = getValue(row, ['BB/K', '선구안']) ?? '데이터 없음';
+      const rf9Value = getValue(row, ['RF9', 'RF/9', '수비범위']) ?? '데이터 없음';
+      const aValue = getValue(row, ['A', '보살', '어시스트']) ?? '데이터 없음';
+      const warValue = getValue(row, ['WAR', '핵심 스탯(WAR)', '핵심스탯(WAR)']) ?? '데이터 없음';
+      const warNum = typeof warValue === 'number' ? warValue : parseFloat(String(warValue));
+      const displayWar = !isNaN(warNum) ? warNum.toFixed(1) : warValue;
 
       return (
         <>
-          <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${ops.isNoData ? "text-gray-500 font-normal" : "text-gold"}`}>{ops.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${wrc.isNoData ? "text-gray-500" : "text-gray-200"}`}>{wrc.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${iso.isNoData ? "text-gray-500" : "text-gray-200"}`}>{iso.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${bbk.isNoData ? "text-gray-500" : "text-gray-200"}`}>{bbk.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${rf9.isNoData ? "text-gray-500" : "text-gray-200"}`}>{rf9.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono ${a.isNoData ? "text-gray-500" : "text-gray-200"}`}>{a.text}</td>
-          <td className={`py-3 px-3 text-center text-xs font-mono font-extrabold ${war.isNoData ? "text-gray-500 font-normal" : "text-emerald-400"}`}>{war.text}</td>
+          <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${opsValue === '데이터 없음' ? "text-gray-500 font-normal" : "text-gold"}`}>
+            {opsValue !== '데이터 없음' && typeof opsValue === 'number' ? opsValue.toFixed(3) : opsValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${wrcValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {wrcValue !== '데이터 없음' && typeof wrcValue === 'number' ? Math.round(wrcValue) : wrcValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${isoValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {isoValue !== '데이터 없음' && typeof isoValue === 'number' ? isoValue.toFixed(3) : isoValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${bbkValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {bbkValue !== '데이터 없음' && typeof bbkValue === 'number' ? bbkValue.toFixed(2) : bbkValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${rf9Value === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {rf9Value !== '데이터 없음' && typeof rf9Value === 'number' ? rf9Value.toFixed(2) : rf9Value}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono ${aValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+            {aValue !== '데이터 없음' && typeof aValue === 'number' ? Math.round(aValue) : aValue}
+          </td>
+          <td className={`py-3 px-3 text-center text-xs font-mono font-extrabold ${displayWar === '데이터 없음' ? "text-gray-500 font-normal" : "text-emerald-400"}`}>
+            {displayWar}
+          </td>
         </>
       );
     }
 
     // 포수 (기본)
-    const cs = formatStatValue(stat["CS%"], "percent");
-    const blk = formatStatValue(stat["PB/9"] ?? stat["BLK/9"], "number2");
-    const ops = formatStatValue(stat.OPS, "number3");
-    const wrc = formatStatValue(stat["wRC+"], "integer");
-    const ip = formatStatValue(stat.IP, "number1");
-    const war = formatStatValue(stat.WAR, "number2");
+    // 2. 유연한 키(Fuzzy) 매칭으로 CS% (도루저지율) 추출
+    const rawCs = getValue(row, ['CS%', '도루저지율', 'CS_PCT', 'CS_RATE', '도루 저지율', 'CS']) 
+      ?? (row.defenseRecord ? getValue(row.defenseRecord, ['CS%', '도루저지율', 'CS_PCT', 'CS']) : undefined);
+    const csValue = rawCs !== undefined && rawCs !== null && rawCs !== "" ? rawCs : '데이터 없음';
+
+    const rawPb = getValue(row, ['Pass/9', 'PASS/9', 'PB/9', 'BLK/9', 'PB', '폭투포일', '패스트볼/9'])
+      ?? (row.defenseRecord ? getValue(row.defenseRecord, ['Pass/9', 'PB/9', 'BLK/9', 'PB']) : undefined);
+    const pbValue = rawPb !== undefined && rawPb !== null && rawPb !== "" ? rawPb : '데이터 없음';
+    const pbNum = typeof pbValue === 'number' ? pbValue : parseFloat(String(pbValue));
+    const displayPb = !isNaN(pbNum) ? pbNum.toFixed(3) : pbValue;
+
+    const rawOps = getValue(row, ['OPS', '출루율+장타율'])
+      ?? (row.batterRecord ? getValue(row.batterRecord, ['OPS']) : undefined);
+    const opsValue = rawOps !== undefined && rawOps !== null && rawOps !== "" ? rawOps : '데이터 없음';
+
+    const rawWrc = getValue(row, ['wRC+', 'WRC+', 'wrc+'])
+      ?? (row.batterRecord ? getValue(row.batterRecord, ['wRC+', 'WRC+']) : undefined);
+    const wrcValue = rawWrc !== undefined && rawWrc !== null && rawWrc !== "" ? rawWrc : '데이터 없음';
+
+    // 3. 투수 IP vs 수비 IP 충돌 예외 처리: 포수는 DEF_IP, 수비이닝, defenseRecord의 IP 우선 지정
+    const rawIp = getValue(row, ['DEF_IP', '수비이닝', '수비 이닝']) 
+      ?? (row.defenseRecord ? getValue(row.defenseRecord, ['IP', 'DEF_IP', '수비이닝']) : undefined)
+      ?? getValue(row, ['IP', '이닝']);
+    const ipValue = rawIp !== undefined && rawIp !== null && rawIp !== "" ? rawIp : '데이터 없음';
+
+    const rawWar = getValue(row, ['WAR', '핵심 스탯(WAR)', '핵심스탯(WAR)']);
+    const warValue = rawWar !== undefined && rawWar !== null && rawWar !== "" ? rawWar : '데이터 없음';
+    const warNum = typeof warValue === 'number' ? warValue : parseFloat(String(warValue));
+    const displayWar = !isNaN(warNum) ? warNum.toFixed(1) : warValue;
 
     return (
       <>
-        <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${cs.isNoData ? "text-gray-500 font-normal" : "text-gold"}`}>
-          {cs.text}
+        <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${csValue === '데이터 없음' ? "text-gray-500 font-normal" : "text-gold"}`}>
+          {csValue !== '데이터 없음' 
+            ? (typeof csValue === 'number' 
+                ? (csValue > 0 && csValue <= 1 ? `${(csValue * 100).toFixed(1)}%` : `${csValue}%`) 
+                : (String(csValue).includes('%') ? csValue : `${csValue}%`)) 
+            : '데이터 없음'}
         </td>
-        <td className={`py-3 px-3 text-center text-xs font-mono ${blk.isNoData ? "text-gray-500" : "text-gray-200"}`}>
-          {blk.text}
+        <td className={`py-3 px-3 text-center text-xs font-mono ${displayPb === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+          {displayPb}
         </td>
-        <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${ops.isNoData ? "text-gray-500 font-normal" : "text-gold"}`}>
-          {ops.text}
+        <td className={`py-3 px-3 text-center text-xs font-mono font-bold ${opsValue === '데이터 없음' ? "text-gray-500 font-normal" : "text-gold"}`}>
+          {opsValue !== '데이터 없음' && typeof opsValue === 'number' ? opsValue.toFixed(3) : opsValue}
         </td>
-        <td className={`py-3 px-3 text-center text-xs font-mono ${wrc.isNoData ? "text-gray-500" : "text-gray-200"}`}>
-          {wrc.text}
+        <td className={`py-3 px-3 text-center text-xs font-mono ${wrcValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+          {wrcValue !== '데이터 없음' && typeof wrcValue === 'number' ? Math.round(wrcValue) : wrcValue}
         </td>
-        <td className={`py-3 px-3 text-center text-xs font-mono ${ip.isNoData ? "text-gray-500" : "text-gray-200"}`}>
-          {ip.text}
+        <td className={`py-3 px-3 text-center text-xs font-mono ${ipValue === '데이터 없음' ? "text-gray-500" : "text-gray-200"}`}>
+          {ipValue !== '데이터 없음' && typeof ipValue === 'number' ? (Number.isInteger(ipValue) ? `${ipValue}.0` : ipValue) : ipValue}
         </td>
-        <td className={`py-3 px-3 text-center text-xs font-mono font-extrabold ${war.isNoData ? "text-gray-500 font-normal" : "text-emerald-400"}`}>
-          {war.text}
+        <td className={`py-3 px-3 text-center text-xs font-mono font-extrabold ${displayWar === '데이터 없음' ? "text-gray-500 font-normal" : "text-emerald-400"}`}>
+          {displayWar}
         </td>
       </>
     );
@@ -658,7 +988,7 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
       const warVal = latestStat?.WAR;
       const hasWar = isValidStatNumber(warVal);
       const warPct = hasWar ? Math.min(99, Math.max(1, Math.round((warVal! / 6.0) * 100))) : null;
-      const warRaw = hasWar ? `${warVal!.toFixed(2)}` : undefined;
+      const warRaw = hasWar ? `${warVal!.toFixed(1)}` : undefined;
 
       return (
         <>
@@ -672,21 +1002,21 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
             <div className="space-y-2.5">
               <PercentileBarItem 
                 idPrefix="statcast-k9"
-                name="탈삼진율 (K/9)" 
+                name="K/9 (탈삼진율)" 
                 subName="Strikeout Rate" 
                 value={k9Pct} 
                 rawDisplay={k9Raw} 
               />
               <PercentileBarItem 
                 idPrefix="statcast-bb9"
-                name="볼넷 억제율 (BB/9)" 
+                name="BB/9 (볼넷 억제율)" 
                 subName="Walk Prevention" 
                 value={bb9Pct} 
                 rawDisplay={bb9Raw} 
               />
               <PercentileBarItem 
                 idPrefix="statcast-lob"
-                name="잔루 처리율 (LOB%)" 
+                name="LOB% (잔루 처리율)" 
                 subName="Left On Base %" 
                 value={lobPct} 
                 rawDisplay={lobRaw} 
@@ -704,21 +1034,21 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
             <div className="space-y-2.5">
               <PercentileBarItem 
                 idPrefix="statcast-era"
-                name="평균자책점 (ERA)" 
+                name="ERA (평균자책점)" 
                 subName="Earned Run Avg" 
                 value={eraPct} 
                 rawDisplay={eraRaw} 
               />
               <PercentileBarItem 
                 idPrefix="statcast-fip"
-                name="수비무관 평자 (FIP)" 
+                name="FIP (수비무관 평자)" 
                 subName="Fielding Ind. Pitching" 
                 value={fipPct} 
                 rawDisplay={fipRaw} 
               />
               <PercentileBarItem 
                 idPrefix="statcast-war"
-                name="종합 승리 기여도 (WAR)" 
+                name="WAR (종합 승리 기여도)" 
                 subName="Wins Above Replacement" 
                 value={warPct} 
                 rawDisplay={warRaw} 
@@ -748,10 +1078,10 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
     const warVal = latestStat?.WAR;
     const hasWar = isValidStatNumber(warVal);
     const warPct = hasWar ? Math.min(99, Math.max(1, Math.round((warVal! / 6.0) * 100))) : null;
-    const warRaw = hasWar ? `${warVal!.toFixed(2)}` : undefined;
+    const warRaw = hasWar ? `${warVal!.toFixed(1)}` : undefined;
 
     // 수비 지표는 포지션별 분기
-    let def1Name = "수비 범위 (RF9)";
+    let def1Name = "RF9 (수비 범위)";
     let def1Sub = "Range Factor";
     let def1Pct: number | null = null;
     let def1Raw: string | undefined = undefined;
@@ -762,7 +1092,7 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
     let def2Raw: string | undefined = undefined;
 
     if (positionGroup === "catcher") {
-      def1Name = "도루 저지율 (CS%)";
+      def1Name = "CS% (도루 저지율)";
       def1Sub = "Caught Stealing %";
       const csVal = latestStat?.["CS%"];
       if (isValidStatNumber(csVal)) {
@@ -771,29 +1101,30 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
         def1Raw = `${val.toFixed(1)}%`;
       }
 
-      def2Name = "팝타임 (Pop Time)";
+      def2Name = "Pop Time (팝타임)";
       def2Sub = "2B Throw Time";
       const popVal = latestStat?.["팝타임"];
       if (isValidStatNumber(popVal)) {
         def2Pct = Math.min(99, Math.max(1, Math.round((1 - (popVal! - 1.85) / 0.35) * 100)));
         def2Raw = `${popVal!.toFixed(2)}초`;
       } else {
-        def2Name = "블로킹율 (PB/9)";
+        def2Name = "Pass/9";
         def2Sub = "Passed Balls / 9";
-        const pbVal = latestStat?.["PB/9"] ?? latestStat?.["BLK/9"];
+        const pbVal = latestStat?.["PB/9"] ?? latestStat?.["BLK/9"] ?? latestStat?.["Pass/9"];
         if (isValidStatNumber(pbVal)) {
           def2Pct = Math.min(99, Math.max(1, Math.round((1 - Math.min(1, Math.max(0, pbVal!))) * 100)));
-          def2Raw = `${pbVal!.toFixed(2)}`;
+          def2Raw = `${pbVal!.toFixed(3)}`;
         }
       }
     } else if (positionGroup === "infield") {
+      def1Name = "RF9 (수비 범위)";
       const rfVal = latestStat?.RF9;
       if (isValidStatNumber(rfVal)) {
         def1Pct = Math.min(99, Math.max(1, Math.round((rfVal! / 6.0) * 100)));
         def1Raw = `${rfVal!.toFixed(2)}`;
       }
 
-      def2Name = "병살 처리 (DP)";
+      def2Name = "DP (병살 처리)";
       def2Sub = "Double Plays Turned";
       const dpVal = latestStat?.DP;
       if (isValidStatNumber(dpVal)) {
@@ -802,13 +1133,14 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
       }
     } else {
       // outfield
+      def1Name = "RF9 (수비 범위)";
       const rfVal = latestStat?.RF9;
       if (isValidStatNumber(rfVal)) {
         def1Pct = Math.min(99, Math.max(1, Math.round((rfVal! / 3.0) * 100)));
         def1Raw = `${rfVal!.toFixed(2)}`;
       }
 
-      def2Name = "외야 보살 (Assists)";
+      def2Name = "A (외야 보살)";
       def2Sub = "Outfield Assists";
       const aVal = latestStat?.A;
       if (isValidStatNumber(aVal)) {
@@ -829,21 +1161,21 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
           <div className="space-y-2.5">
             <PercentileBarItem 
               idPrefix="statcast-ops"
-              name="출루율+장타율 (OPS)" 
+              name="OPS (출루율+장타율)" 
               subName="On-Base Plus Slugging" 
               value={opsPct} 
               rawDisplay={opsRaw} 
             />
             <PercentileBarItem 
               idPrefix="statcast-wrc"
-              name="조정 득점창출력 (wRC+)" 
+              name="wRC+ (조정 득점창출력)" 
               subName="Weighted Runs Created+" 
               value={wrcPct} 
               rawDisplay={wrcRaw} 
             />
             <PercentileBarItem 
               idPrefix="statcast-iso"
-              name="순수 장타율 (ISO)" 
+              name="ISO (순수 장타율)" 
               subName="Isolated Power" 
               value={isoPct} 
               rawDisplay={isoRaw} 
@@ -875,7 +1207,7 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
             />
             <PercentileBarItem 
               idPrefix="statcast-war"
-              name="대체선수대비 승리기여 (WAR)" 
+              name="WAR (대체선수대비 승리기여)" 
               subName="Wins Above Replacement" 
               value={warPct} 
               rawDisplay={warRaw} 
@@ -904,7 +1236,7 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
             </h1>
           </div>
           <p className="text-xs md:text-sm text-gray-400 mt-1">
-            Google 스프레드시트 실시간 연동 • 포지션 자동 판별 및 스탯캐스트 백분위 다이내믹 시각화
+            포지션별 스탯캐스트 분석 및 백분위 다이내믹 시각화
           </p>
         </div>
 
@@ -1065,13 +1397,19 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
                     {currentPosition || getPositionGroupLabel(positionGroup)}
                   </span>
                 </div>
-                <div className="flex items-center gap-3 text-xs text-gray-400 mt-1">
+                <div id="player-profile-summary" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-gray-400 mt-1.5">
                   <span className="flex items-center gap-1">
                     <Layers className="w-3.5 h-3.5 text-gold" />
                     포지션 그룹: <strong className="text-gray-200">{getPositionGroupLabel(positionGroup)}</strong>
                   </span>
-                  <span>•</span>
-                  <span>최신 시즌: <strong className="text-gray-200">{latestStat?.연도 || 2026}년</strong></span>
+                  <span className="text-gray-600">•</span>
+                  <span>나이: <strong className="text-gray-200">{playerProfile?.age || "데이터 없음"}</strong></span>
+                  <span className="text-gray-600">•</span>
+                  <span>연봉: <strong className="text-gold font-semibold">{playerProfile?.salary || "데이터 없음"}</strong></span>
+                  <span className="text-gray-600">•</span>
+                  <span>등록일수: <strong className="text-gray-200">{playerProfile?.serviceTime || "데이터 없음"}</strong></span>
+                  <span className="text-gray-600">•</span>
+                  <span>신장/체중: <strong className="text-gray-200">{playerProfile?.physique || "데이터 없음"}</strong></span>
                 </div>
               </div>
             </div>
@@ -1102,8 +1440,8 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-white/10 bg-white/[0.02]">
-                    <th className="py-2.5 px-3 text-center text-xs font-semibold text-gray-400">시즌</th>
-                    <th className="py-2.5 px-3 text-center text-xs font-semibold text-gray-400">소속 구단</th>
+                    <th className="py-2.5 px-3 text-center text-xs font-bold text-white">시즌</th>
+                    <th className="py-2.5 px-3 text-center text-xs font-bold text-white">소속 구단</th>
                     {renderTableColumns()}
                   </tr>
                 </thead>
@@ -1148,15 +1486,15 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
 
               {/* 범례 */}
               <div className="flex items-center gap-3 text-[11px] text-gray-400">
-                <span className="flex items-center gap-1">
+                <span className="flex items-center gap-1 text-white">
                   <span className="w-2.5 h-2.5 rounded-full bg-red-600" />
                   상위 (75~99%)
                 </span>
-                <span className="flex items-center gap-1">
+                <span className="flex items-center gap-1 text-white">
                   <span className="w-2.5 h-2.5 rounded-full bg-gray-500" />
                   평균 (26~74%)
                 </span>
-                <span className="flex items-center gap-1">
+                <span className="flex items-center gap-1 text-white">
                   <span className="w-2.5 h-2.5 rounded-full bg-blue-600" />
                   하위 (1~25%)
                 </span>
@@ -1181,14 +1519,87 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
 
                 {/* 포지션별 비교 대상 선수 검색/선택 드롭다운 */}
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-400">비교 대상:</span>
+                  <span className="text-xs text-gray-400">비교 선수 검색:</span>
                   <SearchableCompSelect
                     selectedCompId={selectedCompId}
-                    onSelectCompPlayer={(player) => setSelectedCompId(player.id)}
+                    onSelectCompPlayer={handleSelectOrAddCompPlayer}
                     currentMainPlayerName={currentSearchedName}
                     positionGroup={positionGroup}
                     currentSearchedTeam={currentSearchedTeam}
+                    registeredIds={comparisonPool.map(p => p.id)}
                   />
+                </div>
+              </div>
+
+              {/* 임시 등록 비교 대상 후보군 바 (1클릭 전환 및 관리) */}
+              <div className="bg-white/[0.02] border border-white/10 rounded-xl p-2.5 mb-3 flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-gray-400 font-medium flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                    비교 대상 목록 <span className="text-gray-500 font-normal">(클릭 시 레이더 차트에 즉시 비교 반영)</span>
+                  </span>
+                  <span className="text-[10px] text-gray-500 font-mono">
+                    총 {comparisonPool.length}개 대상 등록됨
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 custom-scrollbar">
+                  {comparisonPool.map((p) => {
+                    const isSelected = p.id === selectedCompId;
+                    const isLeagueAvg = p.id === "comp_league_avg";
+                    
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => setSelectedCompId(p.id)}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold cursor-pointer transition-all flex-shrink-0 select-none ${
+                          isSelected
+                            ? (isLeagueAvg 
+                                ? "bg-cyan-500/20 border-cyan-400 text-white shadow-md shadow-cyan-500/10 ring-1 ring-cyan-400/50" 
+                                : "bg-blue-600/25 border-blue-400 text-white shadow-md shadow-blue-500/10 ring-1 ring-blue-400/50")
+                            : "bg-black/30 hover:bg-white/5 border-white/10 text-gray-300 hover:text-white"
+                        }`}
+                      >
+                        {isLeagueAvg ? (
+                          <div className={`w-5 h-5 rounded-lg flex items-center justify-center ${isSelected ? "bg-cyan-500/30 text-cyan-300" : "bg-white/10 text-gray-400"}`}>
+                            <BarChart2 className="w-3.5 h-3.5" />
+                          </div>
+                        ) : (
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${isSelected ? "bg-blue-500 text-white" : "bg-white/10 text-gray-400"}`}>
+                            {p.name.slice(0, 1)}
+                          </div>
+                        )}
+
+                        <div className="flex flex-col text-left">
+                          <div className="flex items-center gap-1.5 leading-none">
+                            <span className={`text-xs font-bold ${isSelected ? (isLeagueAvg ? "text-cyan-300" : "text-blue-300") : "text-gray-200"}`}>
+                              {p.name}
+                            </span>
+                            {isLeagueAvg && (
+                              <span className="text-[9px] px-1 py-0.2 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold">
+                                기본
+                              </span>
+                            )}
+                          </div>
+                          <span className={`text-[10px] ${isSelected ? (isLeagueAvg ? "text-cyan-200/70" : "text-blue-200/70") : "text-gray-500"} leading-tight mt-0.5`}>
+                            {p.team}
+                          </span>
+                        </div>
+
+                        {/* 삭제 버튼 (리그 평균은 기본값이므로 삭제 불가) */}
+                        {!isLeagueAvg && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleRemoveCompPlayer(p.id, e)}
+                            className="ml-1 p-0.5 rounded-md hover:bg-white/20 text-gray-400 hover:text-red-300 transition-colors cursor-pointer"
+                            title="비교 목록에서 제외"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1222,12 +1633,12 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
                       strokeWidth={2.5}
                     />
 
-                    {/* 비교 선수 레이더 (블루) */}
+                    {/* 비교 대상 레이더 (블루 또는 시안) */}
                     <Radar
-                      name={selectedCompPlayer?.name || "비교 선수"}
-                      dataKey={selectedCompPlayer?.name || "비교 선수"}
-                      stroke="#4dabf7"
-                      fill="#4dabf7"
+                      name={selectedCompPlayer?.name || "비교 대상"}
+                      dataKey={selectedCompPlayer?.name || "비교 대상"}
+                      stroke={selectedCompPlayer?.id === "comp_league_avg" ? "#38d9a9" : "#4dabf7"}
+                      fill={selectedCompPlayer?.id === "comp_league_avg" ? "#38d9a9" : "#4dabf7"}
                       fillOpacity={0.25}
                       strokeWidth={2}
                     />
@@ -1308,7 +1719,7 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
                       ) : (
                         <>
                           <Sparkles className="w-3.5 h-3.5 text-black" />
-                          <span>AI 리포트 재생성</span>
+                          <span>AI 리포트 생성</span>
                         </>
                       )}
                     </button>
@@ -1370,7 +1781,10 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
                   {/* 3. 정상 리포트 출력 상태 */}
                   {!loadingAi && !aiError && (
                     <div className="relative group">
-                      <div className="text-[13.5px] leading-relaxed text-gray-200 font-sans whitespace-pre-line bg-black/35 p-4 md:p-5 rounded-xl border border-white/5 shadow-inner">
+                      <div 
+                        className="text-[13.5px] leading-relaxed text-gray-200 font-sans whitespace-pre-wrap break-words h-auto min-h-[140px] max-h-[650px] overflow-y-auto bg-black/35 p-4 md:p-5 pr-24 rounded-xl border border-white/5 shadow-inner"
+                        style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+                      >
                         {typedReport || report || (
                           <span className="text-gray-500">
                             데이터가 정상적으로 로드되었습니다. 상단의 <strong className="text-gold font-semibold">'AI 리포트 재생성'</strong> 버튼을 클릭하여 Gemini 인공지능 기반 구단 연봉 협상용 심층 스카우팅 총평을 생성할 수 있습니다.
@@ -1382,12 +1796,22 @@ export default function PlayerReport({ initialPlayerName = "", initialTeam = "" 
                         )}
                       </div>
 
-                      {/* 복사 버튼 */}
+                      {/* 액션 버튼 그룹 (타이핑 건너뛰기 + 복사 버튼) */}
                       {(typedReport || report) && (
-                        <div className="absolute top-2.5 right-2.5">
+                        <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 z-10">
+                          {isTyping && (
+                            <button
+                              onClick={handleSkipTyping}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gold/20 hover:bg-gold/30 text-gold border border-gold/30 text-[11px] font-bold backdrop-blur-md transition-all shadow-md cursor-pointer"
+                              title="타이핑 효과 건너뛰고 전체 리포트 즉시 보기"
+                            >
+                              <FastForward className="w-3 h-3" />
+                              <span>전체보기</span>
+                            </button>
+                          )}
                           <button
                             onClick={handleCopyReport}
-                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white text-[11px] backdrop-blur-md transition-all shadow-md"
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white text-[11px] backdrop-blur-md transition-all shadow-md cursor-pointer"
                             title="브리핑 텍스트 복사"
                           >
                             {copied ? (

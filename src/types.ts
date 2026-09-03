@@ -1,4 +1,13 @@
-import { extractCsFromObject, extractOpsFromObject, extractWarFromObject, DbRawPlayerRecord } from "./services/dbService";
+import {
+  extractCsFromObject,
+  extractOpsFromObject,
+  extractWarFromObject,
+  DbRawPlayerRecord,
+  getValue,
+  mergeRawRecordsForYear
+} from "./services/dbService";
+
+export { getValue };
 
 // API 응답 데이터 인터페이스
 export interface ApiPlayerStat {
@@ -413,6 +422,68 @@ export interface CompPlayerDef {
   positionGroup: PositionGroup;
   stats: Record<string, number>;
 }
+
+/**
+ * KBO 포지션별 리그 평균 기준치
+ */
+export const LEAGUE_AVERAGE_COMP: Record<PositionGroup, CompPlayerDef> = {
+  catcher: {
+    id: "comp_league_avg",
+    name: "리그 평균",
+    team: "KBO 평균",
+    positionGroup: "catcher",
+    stats: {
+      "wRC+": 100,
+      ISO: 0.135,
+      "BB/K": 0.52,
+      "CS%": 25.5,
+      "PB/9": 0.38,
+      IP: 680,
+    },
+  },
+  infield: {
+    id: "comp_league_avg",
+    name: "리그 평균",
+    team: "KBO 평균",
+    positionGroup: "infield",
+    stats: {
+      "wRC+": 100,
+      ISO: 0.145,
+      "BB/K": 0.55,
+      RF9: 4.10,
+      E: 12,
+      IP: 750,
+    },
+  },
+  outfield: {
+    id: "comp_league_avg",
+    name: "리그 평균",
+    team: "KBO 평균",
+    positionGroup: "outfield",
+    stats: {
+      "wRC+": 100,
+      ISO: 0.155,
+      "BB/K": 0.58,
+      RF9: 2.15,
+      A: 5,
+      IP: 780,
+    },
+  },
+  pitcher: {
+    id: "comp_league_avg",
+    name: "리그 평균",
+    team: "KBO 평균",
+    positionGroup: "pitcher",
+    stats: {
+      "K/9": 7.50,
+      "BB/9": 3.65,
+      ERA: 4.55,
+      FIP: 4.45,
+      "LOB%": 68.5,
+      IP: 105,
+    },
+  },
+};
 
 export const POSITION_COMP_PLAYERS: Record<PositionGroup, CompPlayerDef[]> = {
   catcher: [
@@ -1084,15 +1155,16 @@ export function normalizeRawToApiStat(r: DbRawPlayerRecord | null | undefined, d
   }
 
   return {
+    ...r,
     연도: year,
     선수명: name,
-    "CS%": cs !== undefined && !isNaN(cs) ? cs : undefined,
-    "BLK/9": blk !== undefined && !isNaN(blk) ? blk : undefined,
-    "PB/9": blk !== undefined && !isNaN(blk) ? blk : undefined,
-    OPS: ops !== undefined && !isNaN(ops) ? ops : undefined,
-    "wRC+": wrc !== undefined && !isNaN(wrc) ? wrc : undefined,
-    WAR: war !== undefined && !isNaN(war) ? war : undefined,
-    "팝타임": pop !== undefined && !isNaN(pop) ? pop : undefined,
+    "CS%": cs !== undefined && !isNaN(cs) ? cs : (typeof r["CS%"] === "number" ? r["CS%"] : undefined),
+    "BLK/9": blk !== undefined && !isNaN(blk) ? blk : (typeof r["BLK/9"] === "number" ? r["BLK/9"] : undefined),
+    "PB/9": (typeof r["PB/9"] === "number" ? r["PB/9"] : (blk !== undefined && !isNaN(blk) ? blk : undefined)),
+    OPS: ops !== undefined && !isNaN(ops) ? ops : (typeof r["OPS"] === "number" ? r["OPS"] : undefined),
+    "wRC+": wrc !== undefined && !isNaN(wrc) ? wrc : (typeof r["wRC+"] === "number" ? r["wRC+"] : undefined),
+    WAR: war !== undefined && !isNaN(war) ? war : (typeof r["WAR"] === "number" ? r["WAR"] : undefined),
+    "팝타임": pop !== undefined && !isNaN(pop) ? pop : (typeof r["팝타임"] === "number" ? r["팝타임"] : undefined),
     ISO: iso,
     "BB/K": bbk,
     RF9: rf9,
@@ -1107,10 +1179,10 @@ export function normalizeRawToApiStat(r: DbRawPlayerRecord | null | undefined, d
     "BB/9": bb9,
     "LOB%": lob,
     "HR/9": hr9,
-    IP: ip,
+    IP: ip !== undefined && !isNaN(ip) ? ip : (typeof r["IP"] === "number" ? r["IP"] : undefined),
     팀: r.팀 || r.구단 || r.소속 || r.team,
     포지션: r.포지션 || r.position
-  };
+  } as ApiPlayerStat;
 }
 
 export function extractHistoryFromRawItems(items: any[], defaultName: string): {
@@ -1120,44 +1192,42 @@ export function extractHistoryFromRawItems(items: any[], defaultName: string): {
   resolvedTeam?: string;
   resolvedPosition?: string;
 } {
-  const gathered: ApiPlayerStat[] = [];
+  const allRecords: any[] = [];
   let resolvedTeam: string | undefined;
   let resolvedPosition: string | undefined;
 
   items.forEach((item) => {
     if (!item || typeof item !== "object") return;
     const name = (item.선수명 || item.이름 || item.name || defaultName).trim();
-    if (item.팀 || item.구단 || item.소속 || item.team) {
-      resolvedTeam = item.팀 || item.구단 || item.소속 || item.team;
-    }
-    if (item.포지션 || item.position) {
-      resolvedPosition = item.포지션 || item.position;
-    }
+    const team = getValue(item, ["팀", "구단", "소속", "team"]);
+    if (team) resolvedTeam = team;
+    const pos = getValue(item, ["포지션", "position", "POS"]);
+    if (pos) resolvedPosition = pos;
 
     if (Array.isArray(item.history)) {
       item.history.forEach((h: any) => {
-        const norm = normalizeRawToApiStat({
-          ...h,
-          선수명: h.선수명 || h.이름 || h.name || name,
-          팀: h.팀 || h.구단 || item.팀 || item.구단 || resolvedTeam,
-          포지션: h.포지션 || item.포지션 || resolvedPosition,
-        }, name);
-        if (norm) gathered.push(norm);
+        if (h && typeof h === "object") {
+          allRecords.push({
+            ...h,
+            선수명: h.선수명 || h.이름 || h.name || name,
+            팀: h.팀 || h.구단 || resolvedTeam,
+            포지션: h.포지션 || resolvedPosition
+          });
+        }
       });
     }
 
-    const normSelf = normalizeRawToApiStat(item, name);
-    if (normSelf) gathered.push(normSelf);
+    allRecords.push(item);
   });
 
-  const s2024 = gathered.find((s) => s.연도 === 2024) || null;
-  const s2025 = gathered.find((s) => s.연도 === 2025) || null;
-  const s2026 = gathered.find((s) => s.연도 === 2026) || null;
+  const merged2024 = mergeRawRecordsForYear(allRecords, 2024, defaultName);
+  const merged2025 = mergeRawRecordsForYear(allRecords, 2025, defaultName);
+  const merged2026 = mergeRawRecordsForYear(allRecords, 2026, defaultName);
 
   return {
-    stat2024: s2024,
-    stat2025: s2025,
-    stat2026: s2026,
+    stat2024: normalizeRawToApiStat(merged2024, defaultName),
+    stat2025: normalizeRawToApiStat(merged2025, defaultName),
+    stat2026: normalizeRawToApiStat(merged2026, defaultName),
     resolvedTeam,
     resolvedPosition
   };

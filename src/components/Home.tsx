@@ -17,7 +17,8 @@ import {
   RefreshCw,
   Pencil,
   Flame,
-  Sparkles
+  Sparkles,
+  UserCheck
 } from "lucide-react";
 import { AddPlayerModal } from "./AddPlayerModal";
 import { EditPlayerModal } from "./EditPlayerModal";
@@ -179,14 +180,14 @@ export default function Home() {
               <Database className="w-4 h-4" />
             </div>
             <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-              KBO 선수단 관리 대시보드
+              NOWIWON 계약 선수 관리 대시보드
               <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-gold/15 text-gold border border-gold/30">
                 v2.5 Live
               </span>
             </h2>
           </div>
           <p className="text-xs text-gray-400 mt-1 pl-10.5">
-            Google 스프레드시트 실시간 연동 • 소속 선수 프로필 및 세이버매트릭스 기록 관리
+            NOWIWON 소속 선수 프로필 및 기록 관리
           </p>
         </div>
 
@@ -195,7 +196,7 @@ export default function Home() {
             onClick={handleSyncAllPlayers}
             disabled={isBatchSyncing || players.length === 0}
             className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white text-xs font-semibold border border-white/10 transition-all cursor-pointer disabled:opacity-50 shadow-sm"
-            title="구글 스프레드시트 DB에서 모든 선수 기록 실시간 갱신"
+            title="DB에서 모든 선수 기록 실시간 갱신"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isBatchSyncing ? "animate-spin text-gold" : "text-gray-400"}`} />
             <span>{isBatchSyncing ? "DB 동기화 중..." : "전체 DB 동기화"}</span>
@@ -293,28 +294,34 @@ export default function Home() {
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-white/10 bg-black/30">
-          <table className="w-full text-xs text-left">
-            <thead className="text-[11.5px] text-center text-gray-400 uppercase tracking-wider bg-black/50 border-b border-white/10 font-bold">
+          <table className="w-full text-xs text-left whitespace-nowrap">
+            <thead className="text-[11.5px] text-center text-gray-400 uppercase tracking-wider bg-black/50 border-b border-white/10 font-bold whitespace-nowrap">
               <tr>
-                <th className="px-4 py-3.5 font-bold text-left pl-6">선수명</th>
-                <th className="px-3 py-3.5 font-bold">구단</th>
-                <th className="px-3 py-3.5 font-bold">포지션</th>
-                <th className="px-3 py-3.5 font-bold">나이</th>
-                <th className="px-3 py-3.5 font-bold text-gray-200">타율</th>
-                <th className="px-3 py-3.5 font-bold text-gray-200">OPS</th>
-                <th className="px-3 py-3.5 font-bold text-gray-200">홈런</th>
-                <th className="px-3 py-3.5 font-bold text-gold">최근 WAR</th>
-                <th className="px-4 py-3.5 font-bold text-white">현재 연봉</th>
-                <th className="px-4 py-3.5 font-bold text-gray-300">
-                  <div className="flex items-center justify-center gap-1">
+                <th className="px-3 py-3 font-bold text-center text-white whitespace-nowrap">선수명</th>
+                <th className="px-2 py-3 font-bold text-white whitespace-nowrap">구단</th>
+                <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap">포지션</th>
+                <th className="px-2 py-3 font-bold text-white whitespace-nowrap">나이</th>
+                <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap">타율</th>
+                <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap">OPS</th>
+                <th className="px-2 py-3 font-bold text-white whitespace-nowrap">홈런</th>
+                <th className="px-2.5 py-3 font-bold text-gold whitespace-nowrap">최근 WAR</th>
+                <th className="px-3 py-3 font-bold text-white whitespace-nowrap">현재 연봉</th>
+                <th className="px-3 py-3 font-bold text-white whitespace-nowrap">
+                  <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                     <Calendar className="w-3 h-3 text-gold" />
-                    <span>에이전트 계약기간</span>
+                    <span className="text-white">에이전트 계약기간</span>
                   </div>
                 </th>
-                <th className="px-4 py-3.5 font-bold text-gray-400">관리</th>
+                <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap">
+                  <div className="flex items-center justify-center gap-1 whitespace-nowrap">
+                    <UserCheck className="w-3 h-3 text-gold" />
+                    <span className="text-white">에이전트</span>
+                  </div>
+                </th>
+                <th className="px-3 py-3 font-bold text-white whitespace-nowrap">관리</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-white/5 whitespace-nowrap">
               {players.map((player) => {
                 const latestStat = player.stats?.[player.stats.length - 1];
                 const war = latestStat?.war ?? 0;
@@ -323,70 +330,81 @@ export default function Home() {
                 const hr = latestStat?.hr !== undefined ? `${latestStat.hr}개` : "-";
                 const period = player.contractPeriod || "25년 01월 01일 ~ 27년 12월 31일";
                 const isSyncingThis = syncingPlayerId === player.id;
+                const agentName = player.agent || "이세인";
 
                 return (
                   <tr
                     key={player.id}
                     className="hover:bg-white/5 transition-colors text-center text-xs font-sans group"
                   >
-                    <td className="px-4 py-3.5 font-semibold text-white text-left pl-6">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-xl bg-gold/15 border border-gold/30 text-gold text-xs font-black flex items-center justify-center shadow-sm">
+                    <td className="px-3 py-2.5 font-semibold text-white text-left pl-5 whitespace-nowrap">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-gold/15 border border-gold/30 text-gold text-xs font-black flex items-center justify-center shadow-sm flex-shrink-0">
                           {player.name.charAt(0)}
                         </div>
-                        <div>
-                          <span className="font-bold text-white text-sm block">{player.name}</span>
-                          <span className="text-xs text-gray-400 font-medium">입단 {player.draftYear}년</span>
+                        <div className="whitespace-nowrap text-left">
+                          <span className="font-bold text-white text-sm block leading-snug text-left">{player.name}</span>
+                          <span className="text-xs text-white font-medium whitespace-nowrap text-left block">입단 {player.draftYear}년</span>
                         </div>
                       </div>
                     </td>
-                    <td className="px-3 py-3.5">
-                      <span className="px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-gray-200 text-xs font-semibold">
+                    <td className="px-2 py-2.5 whitespace-nowrap">
+                      <span className="px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-white text-xs font-semibold whitespace-nowrap inline-block">
                         {player.team}
                       </span>
                     </td>
-                    <td className="px-3 py-3.5 text-gray-200 font-semibold text-xs">{player.position}</td>
-                    <td className="px-3 py-3.5 text-gray-300 font-medium text-xs">{player.age || 24}세</td>
-                    <td className="px-3 py-3.5 text-white font-bold text-xs tracking-wide">{avg}</td>
-                    <td className="px-3 py-3.5 text-white font-bold text-xs tracking-wide">{ops}</td>
-                    <td className="px-3 py-3.5 text-white font-bold text-xs tracking-wide">{hr}</td>
-                    <td className="px-3 py-3.5 text-gold font-bold text-sm">
+                    <td className="px-2.5 py-2.5 text-white font-semibold text-xs whitespace-nowrap">{player.position}</td>
+                    <td className="px-2.5 py-2.5 text-white font-medium text-xs whitespace-nowrap">{player.age || 24}세</td>
+                    <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{avg}</td>
+                    <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{ops}</td>
+                    <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{hr}</td>
+                    <td className="px-2.5 py-2.5 text-gold font-bold text-sm whitespace-nowrap">
                       {war.toFixed(1)}
                     </td>
-                    <td className="px-4 py-3.5 text-emerald-400 font-bold text-xs">
+                    <td className="px-3 py-2.5 text-emerald-400 font-bold text-xs whitespace-nowrap">
                       {formatSalaryText(player.salaryCurrent)}
                     </td>
-                    <td className="px-4 py-3.5">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-xs font-medium text-gray-200">
-                        <Clock className="w-3.5 h-3.5 text-gold opacity-90" />
-                        {period}
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-xs font-medium text-white whitespace-nowrap">
+                        <Clock className="w-3.5 h-3.5 text-gold opacity-90 flex-shrink-0" />
+                        <span className="whitespace-nowrap text-white">{period}</span>
                       </span>
                     </td>
-                    <td className="px-4 py-3.5">
-                      <div className="flex items-center justify-center gap-1.5">
+                    <td className="px-2.5 py-2.5 whitespace-nowrap">
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap shadow-sm border ${
+                        agentName === "이세인"
+                          ? "bg-gold/15 border-gold/35 text-gold"
+                          : "bg-amber-400/10 border-amber-400/30 text-amber-200"
+                      }`}>
+                        <UserCheck className="w-3 h-3 opacity-80 flex-shrink-0" />
+                        <span className="whitespace-nowrap">{agentName}</span>
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">
                         <button
                           onClick={() => setEditingPlayer(player)}
-                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer"
+                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer whitespace-nowrap"
                           title="선수 정보 및 성적 수정"
                         >
-                          <Pencil className="w-3 h-3 text-gold" />
-                          <span>수정</span>
+                          <Pencil className="w-3 h-3 text-gold flex-shrink-0" />
+                          <span className="whitespace-nowrap">수정</span>
                         </button>
                         <button
                           onClick={() => handleSyncSinglePlayer(player)}
                           disabled={isSyncingThis}
-                          className="px-2 py-1 rounded-lg bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          className="px-2 py-1 rounded-lg bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50 whitespace-nowrap"
                           title="구글 스프레드시트 DB에서 최신 기록 동기화"
                         >
-                          <RefreshCw className={`w-3 h-3 ${isSyncingThis ? "animate-spin text-gold" : ""}`} />
-                          <span>{isSyncingThis ? "..." : "DB"}</span>
+                          <RefreshCw className={`w-3 h-3 flex-shrink-0 ${isSyncingThis ? "animate-spin text-gold" : ""}`} />
+                          <span className="whitespace-nowrap">{isSyncingThis ? "..." : "DB"}</span>
                         </button>
                         <button
                           onClick={() => setDeleteTargetPlayer(player)}
-                          className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all cursor-pointer"
+                          className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all cursor-pointer whitespace-nowrap"
                           title="선수 삭제"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5 flex-shrink-0" />
                         </button>
                       </div>
                     </td>
@@ -396,7 +414,7 @@ export default function Home() {
 
               {players.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="text-center py-12 text-gray-500 font-sans">
+                  <td colSpan={12} className="text-center py-12 text-gray-500 font-sans">
                     <Users className="w-8 h-8 mx-auto mb-2 opacity-30" />
                     <p className="text-sm font-semibold mb-2">등록된 선수가 없습니다.</p>
                     <button
