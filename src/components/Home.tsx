@@ -120,12 +120,13 @@ export default function Home() {
   // 구글 Apps Script Web App 직접 하드코딩 엔드포인트 주소
   const GAS_DB_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
 
-  // 1. 초기 데이터 로드: 메인 대시보드가 처음 렌더링될 때 전체 선수 데이터를 구글 Apps Script에서 fetch
+  // 1. 초기 데이터 로드: 메인 대시보드가 처음 렌더링될 때 App_data_DB(에이전시 소속 선수) 탭 데이터를 구글 Apps Script에서 fetch
   useEffect(() => {
     const fetchDashboardPlayers = async () => {
       try {
         const timestamp = new Date().getTime();
-        const fetchUrl = `${GAS_DB_URL}?t=${timestamp}`;
+        // 쿼리 파라미터로 sheetName=App_data_DB 및 type=agency 명시
+        const fetchUrl = `${GAS_DB_URL}?sheetName=App_data_DB&type=agency&t=${timestamp}`;
         const response = await fetch(fetchUrl);
 
         if (!response.ok) {
@@ -157,49 +158,19 @@ export default function Home() {
         }
 
         // 객체 배열을 Player 인터페이스 규격으로 변환
-        let mappedPlayers = rawList
+        const mappedPlayers = rawList
           .map((item, idx) => mapRawToPlayer(item, idx))
           .filter((p): p is Player => p !== null);
-
-        // 만약 GAS 기본 호출 시 별도 검색 파라미터가 없어 결과가 비어있고, 현재 로컬스토리지에도 선수가 0명인 경우:
-        // 구글 스프레드시트 5개 시트 JOIN DB에서 실제 KBO 구단 로스터를 조회하여 대시보드 선수 데이터를 연동
-        if (mappedPlayers.length === 0) {
-          const localStored = loadStoredPlayers();
-          if (localStored.length > 0) {
-            mappedPlayers = localStored;
-          } else {
-            try {
-              const rosterRes = await fetchTeamRosterFromDatabase("롯데 자이언츠");
-              if (rosterRes.success && rosterRes.players.length > 0) {
-                mappedPlayers = rosterRes.players.map((tp, idx) => ({
-                  id: String(tp.id || `lotte_${idx}`),
-                  name: tp.name,
-                  team: "롯데 자이언츠",
-                  position: tp.position || "외야수",
-                  age: parsePlayerAge(tp.age),
-                  salaryCurrent: tp.salary || 0,
-                  draftYear: parseDraftYear(tp.draftYear).draftYear || 2018,
-                  serviceTime: String(tp.serviceTime || "1년 0일"),
-                  contractPeriod: "24년 01월 01일 ~ 26년 12월 31일",
-                  agent: "이세인",
-                  stats: [
-                    {
-                      year: 2026,
-                      war: tp.war,
-                      salary: tp.salary
-                    }
-                  ]
-                }));
-              }
-            } catch (fallbackErr) {
-              console.warn("대시보드 기본 로스터 로드 시도 결과:", fallbackErr);
-            }
-          }
-        }
 
         if (mappedPlayers.length > 0) {
           setPlayers(mappedPlayers);
           saveStoredPlayers(mappedPlayers);
+        } else {
+          // 로컬 스토리지에 기존 저장된 에이전시 선수가 있다면 유지
+          const localStored = loadStoredPlayers();
+          if (localStored.length > 0) {
+            setPlayers(localStored);
+          }
         }
       } catch (error) {
         console.error('대시보드 데이터 로드 실패:', error);
