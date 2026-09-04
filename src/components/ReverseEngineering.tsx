@@ -335,14 +335,101 @@ export default function ReverseEngineering() {
         return;
       }
 
-      // 2. 세션 스토리지에 데이터가 없는 경우: 기존처럼 구글 API로 fetch 통신 수행
-      console.log("🌐 [Initial DB Fetch] 세션 스토리지 캐시 없음 - 10개 구단 데이터 API 통신 시작");
+      // 2. 세션 스토리지에 데이터가 없는 경우: 점진적/안정적 API 통신 수행
       try {
         const payrolls: Record<string, number> = {};
+        mockTeams.forEach((t) => {
+          if (t.currentPayroll) payrolls[t.name] = t.currentPayroll;
+        });
+        setTeamPayrollMap((prev) => ({ ...payrolls, ...prev }));
+
         const preloaded: Record<string, DbTeamPlayer[]> = {};
 
+        // 2-1. 현재 활성 선택된 구단 로스터를 즉시 우선 로드
+        try {
+          const activeRes = await fetchTeamRosterFromDatabase(selectedTeam.name);
+          if (activeRes.success && activeRes.players && activeRes.players.length > 0) {
+            const total = activeRes.players.reduce((sum, p) => sum + (p.salary || 0), 0);
+            payrolls[selectedTeam.name] = total;
+            preloaded[selectedTeam.name] = activeRes.players;
+            if (isMounted) {
+              setTeamRoster(activeRes.players);
+              setIsDbLoaded(true);
+              setIsRosterLoading(false);
+              setRosterError(null);
+            }
+          }
+        } catch (err) {
+          console.warn(`[ReverseEngineering] ${selectedTeam.name} 초기 로드 안내:`, err);
+        }
+
+        // 2-2. 나머지 구단들은 2개씩 순차 청크로 조회하여 동시 요청 과부하(HTTP 404/429) 방지
+        const otherTeams = mockTeams.filter((t) => t.name !== selectedTeam.name);
+        for (let i = 0; i < otherTeams.length; i += 2) {
+          if (!isMounted) break;
+          const chunk = otherTeams.slice(i, i + 2);
+          await Promise.all(
+            chunk.map(async (team) => {
+              try {
+                const res = await fetchTeamRosterFromDatabase(team.name);
+                if (res.success && res.players && res.players.length > 0) {
+                  const total = res.players.reduce((sum, p) => sum + (p.salary || 0), 0);
+                  payrolls[team.name] = total;
+                  preloaded[team.name] = res.players;
+                } else if (team.currentPayroll) {
+                  payrolls[team.name] = team.currentPayroll;
+                }
+              } catch {
+                if (team.currentPayroll) {
+                  payrolls[team.name] = team.currentPayroll;
+                }
+              }
+            })
+          );
+        }
+
+        if (isMounted) {
+          setTeamPayrollMap((prev) => ({ ...prev, ...payrolls }));
+          teamDataCacheRef.current = { ...preloaded, ...teamDataCacheRef.current };
+          setTeamDataCache((prev) => ({ ...preloaded, ...prev }));
+
+          if (preloaded[selectedTeam.name] && preloaded[selectedTeam.name].length > 0) {
+            setTeamRoster(preloaded[selectedTeam.name]);
+            setIsDbLoaded(true);
+            setIsRosterLoading(false);
+            setRosterError(null);
+          }
+
+          // 받아온 데이터를 State에 렌더링함과 동시에 sessionStorage에 임시 저장
+          saveStoredTendencyData(teamDataCacheRef.current);
+        }
+      } catch (e) {
+        console.warn("전체 구단 연봉 및 캐시 로드 안내:", e);
+      }
+    };
+
+    loadAllTeamPayrolls();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // 10개 구단 전체 실시간 DB 강제 새로고침 (캐시 무시 및 최신화, 2개씩 순차 청크 처리)
+  const refreshAllTeamsRosters = async () => {
+    setIsAllTeamsRefreshing(true);
+    setRosterError(null);
+    try {
+      const payrolls: Record<string, number> = {};
+      mockTeams.forEach((t) => {
+        if (t.currentPayroll) payrolls[t.name] = t.currentPayroll;
+      });
+
+      const preloaded: Record<string, DbTeamPlayer[]> = {};
+
+      for (let i = 0; i < mockTeams.length; i += 2) {
+        const chunk = mockTeams.slice(i, i + 2);
         await Promise.all(
-          mockTeams.map(async (team) => {
+          chunk.map(async (team) => {
             try {
               const res = await fetchTeamRosterFromDatabase(team.name);
               if (res.success && res.players && res.players.length > 0) {
@@ -359,59 +446,7 @@ export default function ReverseEngineering() {
             }
           })
         );
-
-        if (isMounted) {
-          setTeamPayrollMap((prev) => ({ ...prev, ...payrolls }));
-          teamDataCacheRef.current = { ...preloaded, ...teamDataCacheRef.current };
-          setTeamDataCache((prev) => ({ ...preloaded, ...prev }));
-
-          if (preloaded[selectedTeam.name] && preloaded[selectedTeam.name].length > 0) {
-            setTeamRoster(preloaded[selectedTeam.name]);
-            setIsDbLoaded(true);
-            setIsRosterLoading(false);
-            setRosterError(null);
-          }
-
-          // 받아온 데이터를 State에 렌더링함과 동시에 sessionStorage에 임시 저장
-          saveStoredTendencyData(preloaded);
-        }
-      } catch (e) {
-        console.error("전체 구단 연봉 및 캐시 로드 실패:", e);
       }
-    };
-
-    loadAllTeamPayrolls();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  // 10개 구단 전체 실시간 DB 강제 새로고침 (캐시 무시 및 최신화)
-  const refreshAllTeamsRosters = async () => {
-    setIsAllTeamsRefreshing(true);
-    setRosterError(null);
-    try {
-      const payrolls: Record<string, number> = {};
-      const preloaded: Record<string, DbTeamPlayer[]> = {};
-
-      await Promise.all(
-        mockTeams.map(async (team) => {
-          try {
-            const res = await fetchTeamRosterFromDatabase(team.name);
-            if (res.success && res.players && res.players.length > 0) {
-              const total = res.players.reduce((sum, p) => sum + (p.salary || 0), 0);
-              payrolls[team.name] = total;
-              preloaded[team.name] = res.players;
-            } else if (team.currentPayroll) {
-              payrolls[team.name] = team.currentPayroll;
-            }
-          } catch {
-            if (team.currentPayroll) {
-              payrolls[team.name] = team.currentPayroll;
-            }
-          }
-        })
-      );
 
       setTeamPayrollMap((prev) => ({ ...prev, ...payrolls }));
       teamDataCacheRef.current = { ...teamDataCacheRef.current, ...preloaded };
@@ -424,9 +459,9 @@ export default function ReverseEngineering() {
       }
 
       // sessionStorage 최신화
-      saveStoredTendencyData(preloaded);
+      saveStoredTendencyData(teamDataCacheRef.current);
     } catch (e) {
-      console.error("10개 구단 전체 데이터 새로고침 실패:", e);
+      console.warn("10개 구단 전체 데이터 새로고침 안내:", e);
     } finally {
       setIsAllTeamsRefreshing(false);
     }

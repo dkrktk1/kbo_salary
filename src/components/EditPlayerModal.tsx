@@ -9,7 +9,8 @@ import {
   ChevronDown,
   ChevronUp,
   UserCheck,
-  Pencil
+  Pencil,
+  Loader2
 } from "lucide-react";
 
 interface EditPlayerModalProps {
@@ -67,14 +68,17 @@ function parseDatesFromPeriod(period?: string): { start: string; end: string } {
   return { start: "2026-01-01", end: "2026-12-31" };
 }
 
-export function EditPlayerModal({
+interface EditPlayerModalContentProps {
+  player: Player;
+  onClose: () => void;
+  onSave: (updated: Player) => void;
+}
+
+function EditPlayerModalContent({
   player,
-  isOpen,
   onClose,
   onSave
-}: EditPlayerModalProps) {
-  if (!isOpen || !player) return null;
-
+}: EditPlayerModalContentProps) {
   const [name, setName] = useState(player.name);
   const [team, setTeam] = useState(player.team);
   const [position, setPosition] = useState(player.position);
@@ -90,10 +94,13 @@ export function EditPlayerModal({
   const s25 = player.stats?.find((s) => s.year === 2025);
   const s24 = player.stats?.find((s) => s.year === 2024);
 
-  const [avg, setAvg] = useState<number>(s26?.avg ?? 0.285);
-  const [ops, setOps] = useState<number>(s26?.ops ?? 0.820);
+  const [avg, setAvg] = useState<string>(s26?.avg !== undefined ? s26.avg.toFixed(3) : "0.285");
+  const [ops, setOps] = useState<string>(s26?.ops !== undefined ? s26.ops.toFixed(3) : "0.820");
   const [hr, setHr] = useState<number>(s26?.hr ?? 12);
   const [war, setWar] = useState<number>(s26?.war ?? 2.8);
+  const [era, setEra] = useState<number>(s26?.era !== undefined ? Number(s26.era.toFixed(2)) : 3.85);
+  const [whip, setWhip] = useState<number>(s26?.whip ?? 1.25);
+  const [wls, setWls] = useState<string>(s26?.wls ?? "10승 5패");
 
   const [showYearlyDetails, setShowYearlyDetails] = useState(false);
   const [stat2024, setStat2024] = useState({
@@ -112,13 +119,40 @@ export function EditPlayerModal({
   });
 
   const parsedDates = parseDatesFromPeriod(player.contractPeriod);
-  const [agent, setAgent] = useState<string>(player.agent || "이세인");
+  const getPlayerAgent = (p?: Player | null): string => {
+    if (!p) return "미정";
+    const raw = p.agent || (p as any)["에이전트"] || (p as any)["담당 에이전트"];
+    if (raw && String(raw).trim() && String(raw).trim() !== "미정") {
+      return String(raw).trim();
+    }
+    return "미정";
+  };
+  const [agent, setAgent] = useState<string>(getPlayerAgent(player));
   const [contractStartDate, setContractStartDate] = useState(parsedDates.start);
   const [contractEndDate, setContractEndDate] = useState(parsedDates.end);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   useEffect(() => {
     if (player) {
-      setAgent(player.agent || "이세인");
+      setName(player.name);
+      setTeam(player.team);
+      setPosition(player.position);
+      setAge(player.age || 25);
+      setDraftYear(player.draftYear || 2021);
+      setServiceTime(player.serviceTime || "3년 0일");
+      setSalaryManwon(Math.round((player.salaryCurrent || 0) / 10000));
+      const latest = player.stats?.find((s) => s.year === 2026) || player.stats?.[player.stats.length - 1];
+      setAvg(latest?.avg !== undefined ? latest.avg.toFixed(3) : "0.285");
+      setOps(latest?.ops !== undefined ? latest.ops.toFixed(3) : "0.820");
+      setHr(latest?.hr ?? 12);
+      setWar(latest?.war ?? 2.8);
+      setEra(latest?.era !== undefined ? Number(latest.era.toFixed(2)) : 3.85);
+      setWhip(latest?.whip ?? 1.25);
+      setWls(latest?.wls ?? "10승 5패");
+      setAgent(getPlayerAgent(player));
+      const d = parseDatesFromPeriod(player.contractPeriod);
+      setContractStartDate(d.start);
+      setContractEndDate(d.end);
     }
   }, [player]);
 
@@ -132,7 +166,13 @@ export function EditPlayerModal({
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+    }
+
+    if (isSubmitting) return;
+
     const trimmedName = name.trim();
     if (!trimmedName) {
       alert("선수명을 입력해주세요.");
@@ -145,28 +185,46 @@ export function EditPlayerModal({
         ? `${formatDateToKorean(contractStartDate)} ~ ${formatDateToKorean(contractEndDate)}`
         : player.contractPeriod || "25년 01월 01일 ~ 27년 12월 31일";
 
+    const isPitcher = position.includes("투수");
+
+    const finalAvg = isPitcher ? "" : (parseFloat(avg) || 0);
+    const finalOps = isPitcher ? "" : (parseFloat(ops) || 0);
+    const finalHr = isPitcher ? "" : (typeof hr === "number" ? hr : 0);
+    const finalEra = isPitcher ? (era !== undefined && era !== null ? Number(Number(era).toFixed(2)) : "") : "";
+    const finalWhip = isPitcher ? (whip !== undefined ? whip : "") : "";
+    const finalWls = isPitcher ? (wls.trim() || "") : "";
+
     const finalStats: PlayerStat[] = [
       {
         year: 2024,
-        avg: stat2024.avg,
-        ops: stat2024.ops,
-        hr: stat2024.hr,
+        avg: isPitcher ? undefined : stat2024.avg,
+        ops: isPitcher ? undefined : stat2024.ops,
+        hr: isPitcher ? undefined : stat2024.hr,
+        era: isPitcher ? era : undefined,
+        whip: isPitcher ? whip : undefined,
+        wls: isPitcher ? wls : undefined,
         war: stat2024.war,
         salary: stat2024.salaryManwon * 10000,
       },
       {
         year: 2025,
-        avg: stat2025.avg,
-        ops: stat2025.ops,
-        hr: stat2025.hr,
+        avg: isPitcher ? undefined : stat2025.avg,
+        ops: isPitcher ? undefined : stat2025.ops,
+        hr: isPitcher ? undefined : stat2025.hr,
+        era: isPitcher ? era : undefined,
+        whip: isPitcher ? whip : undefined,
+        wls: isPitcher ? wls : undefined,
         war: stat2025.war,
         salary: stat2025.salaryManwon * 10000,
       },
       {
         year: 2026,
-        avg: avg,
-        ops: ops,
-        hr: hr,
+        avg: isPitcher ? undefined : (parseFloat(avg) || 0),
+        ops: isPitcher ? undefined : (parseFloat(ops) || 0),
+        hr: isPitcher ? undefined : hr,
+        era: isPitcher ? era : undefined,
+        whip: isPitcher ? whip : undefined,
+        wls: isPitcher ? wls : undefined,
         war: war,
         salary: currentSalaryWon,
       },
@@ -185,14 +243,74 @@ export function EditPlayerModal({
       agent,
       stats: finalStats,
     };
+    (updated as any)["에이전트"] = agent;
+    (updated as any)["담당 에이전트"] = agent;
 
-    onSave(updated);
+    // 1. 구글 Apps Script Web App 주소로 수정 데이터 POST 전송
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+    
+    // 2. Payload에 action: 'update' 플래그 추가
+    const payload: Record<string, any> = {
+      action: "update",
+      "선수명": trimmedName,
+      "구단": team,
+      "포지션": position,
+      "나이": age,
+      // 타자 스탯 (투수면 빈칸)
+      "타율": finalAvg,
+      "OPS": finalOps,
+      "홈런": finalHr,
+      // 투수 스탯 (타자면 빈칸)
+      "ERA": finalEra,
+      "WHIP": finalWhip,
+      "승/홀/세": finalWls,
+      "승률": finalWls,
+      // 공통 메타데이터
+      "최근 WAR": war,
+      "현재 연봉": salaryManwon,
+      "에이전트 계약기간": contractPeriodText,
+      "에이전트 계약기간 관리": contractPeriodText,
+      "에이전트": agent,
+      "담당 에이전트": agent,
+      "관리": "",
+      sheetName: "App_data_DB",
+      type: "agency",
+    };
+
+    setIsSubmitting(true);
+
+    try {
+      console.log("선수 수정 DB 전송 데이터 (action: update):", payload);
+
+      await fetch(GAS_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain;charset=utf-8",
+        },
+        body: JSON.stringify(payload),
+        mode: "no-cors",
+      });
+
+      // 3. 응답 성공 시 프론트엔드 상태 확정 및 모달 닫기
+      onSave(updated);
+    } catch (error) {
+      console.error("수정 데이터 DB 저장 실패:", error);
+      // 에러 발생 시에도 프론트엔드 상태 반영은 유지
+      onSave(updated);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const formatSalaryPreview = (manwon: number) => {
+    if (!manwon || manwon <= 0) return "0원";
     if (manwon >= 10000) {
-      const uk = manwon / 10000;
-      return `${uk.toFixed(uk % 1 === 0 ? 0 : 2)}억원 (${manwon.toLocaleString()}만원)`;
+      const uk = Math.floor(manwon / 10000);
+      const rest = manwon % 10000;
+      if (rest > 0) {
+        return `${uk}억 ${rest.toLocaleString()}만원 (${manwon.toLocaleString()}만원)`;
+      }
+      return `${uk}억원 (${manwon.toLocaleString()}만원)`;
     }
     return `${manwon.toLocaleString()}만원`;
   };
@@ -276,59 +394,131 @@ export function EditPlayerModal({
             <div className="flex items-center justify-between border-b border-white/10 pb-2.5 flex-wrap gap-1">
               <span className="text-xs font-bold text-gold uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap">
                 <Sparkles className="w-4 h-4 text-gold" />
-                2026 성적 지표 (타율, OPS, 홈런, WAR)
+                {position.includes("투수")
+                  ? "2026 투수 성적 지표 (ERA, WHIP, 승/홀/세, WAR)"
+                  : "2026 타자 성적 지표 (타율, OPS, 홈런, WAR)"}
               </span>
               <span className="text-[11px] text-gray-400 whitespace-nowrap">직접 입력하여 실시간 반영</span>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {/* 타율 */}
-              <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
-                <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
-                  타율 (AVG)
-                </label>
-                <input
-                  type="number"
-                  step="0.001"
-                  min="0"
-                  max="1"
-                  value={avg}
-                  onChange={(e) => setAvg(parseFloat(e.target.value) || 0)}
-                  className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
-                />
-              </div>
+              {position.includes("투수") ? (
+                <>
+                  {/* ERA */}
+                  <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                    <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                      평균자책점 (ERA)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="30"
+                      value={era}
+                      onChange={(e) => setEra(parseFloat(e.target.value) || 0)}
+                      className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                    />
+                  </div>
 
-              {/* OPS */}
-              <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
-                <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
-                  OPS
-                </label>
-                <input
-                  type="number"
-                  step="0.001"
-                  min="0"
-                  max="2"
-                  value={ops}
-                  onChange={(e) => setOps(parseFloat(e.target.value) || 0)}
-                  className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
-                />
-              </div>
+                  {/* WHIP */}
+                  <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                    <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                      출루허용 (WHIP)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="10"
+                      value={whip}
+                      onChange={(e) => setWhip(parseFloat(e.target.value) || 0)}
+                      className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                    />
+                  </div>
 
-              {/* 홈런 */}
-              <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
-                <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
-                  홈런 (개)
-                </label>
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  max="100"
-                  value={hr}
-                  onChange={(e) => setHr(parseInt(e.target.value) || 0)}
-                  className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
-                />
-              </div>
+                  {/* 승/홀/세 */}
+                  <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                    <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                      승/홀/세 (기록)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="10승 5패"
+                      value={wls}
+                      onChange={(e) => setWls(e.target.value)}
+                      className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-sm font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* 타율 */}
+                  <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                    <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                      타율 (AVG)
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0.000"
+                      value={avg}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "" || /^[0-9]*\.?[0-9]*$/.test(val)) {
+                          setAvg(val);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (avg !== "" && !isNaN(parseFloat(avg))) {
+                          setAvg(parseFloat(avg).toFixed(3));
+                        }
+                      }}
+                      className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                    />
+                  </div>
+
+                  {/* OPS */}
+                  <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                    <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                      OPS
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0.000"
+                      value={ops}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "" || /^[0-9]*\.?[0-9]*$/.test(val)) {
+                          setOps(val);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (ops !== "" && !isNaN(parseFloat(ops))) {
+                          setOps(parseFloat(ops).toFixed(3));
+                        }
+                      }}
+                      className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                    />
+                  </div>
+
+                  {/* 홈런 */}
+                  <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                    <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                      홈런 (개)
+                    </label>
+                    <input
+                      type="number"
+                      step="1"
+                      min="0"
+                      max="100"
+                      value={hr}
+                      onChange={(e) => setHr(parseInt(e.target.value) || 0)}
+                      className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                    />
+                  </div>
+                </>
+              )}
 
               {/* WAR */}
               <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
@@ -554,7 +744,7 @@ export function EditPlayerModal({
             </label>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* 담당 에이전트 드롭다운 */}
+              {/* 담당 에이전트 드롭다운 및 빠른 선택 버튼 */}
               <div>
                 <label className="block text-[11px] font-bold text-gold mb-1.5 whitespace-nowrap flex items-center gap-1">
                   <UserCheck className="w-3.5 h-3.5 text-gold" />
@@ -565,12 +755,44 @@ export function EditPlayerModal({
                   onChange={(e) => setAgent(e.target.value)}
                   className="w-full h-10 bg-black/50 border border-gold/40 rounded-lg px-3 text-sm text-white font-bold focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold transition-colors cursor-pointer"
                 >
+                  <option value="미정" className="bg-[#1a1d24] text-gray-400">
+                    미정 (담당자 선택)
+                  </option>
                   {AVAILABLE_AGENTS.map((a) => (
-                    <option key={a} value={a} className="bg-[#1a1d24] text-white">
+                    <option key={a} value={a} className="bg-[#1a1d24] text-white font-bold">
                       {a} 에이전트
                     </option>
                   ))}
                 </select>
+
+                {/* 원클릭 빠른 선택 칩 */}
+                <div className="flex items-center gap-1.5 mt-2">
+                  {AVAILABLE_AGENTS.map((a) => (
+                    <button
+                      key={a}
+                      type="button"
+                      onClick={() => setAgent(a)}
+                      className={`flex-1 py-1 px-1.5 rounded text-[11px] font-bold transition-all cursor-pointer border flex items-center justify-center gap-1 ${
+                        agent === a
+                          ? "bg-gold text-black border-gold shadow-sm font-extrabold"
+                          : "bg-white/5 text-gray-300 border-white/10 hover:bg-white/10 hover:text-white"
+                      }`}
+                    >
+                      <span>{a}</span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setAgent("미정")}
+                    className={`py-1 px-2 rounded text-[11px] font-semibold transition-all cursor-pointer border ${
+                      agent === "미정"
+                        ? "bg-rose-500/20 text-rose-300 border-rose-500/40 font-bold"
+                        : "bg-white/5 text-gray-400 border-white/10 hover:bg-white/10 hover:text-gray-200"
+                    }`}
+                  >
+                    미정
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -608,8 +830,14 @@ export function EditPlayerModal({
                 표시 형태:
               </span>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gold/15 border border-gold/30 text-gold font-bold text-xs whitespace-nowrap">
-                  <UserCheck className="w-3 h-3 text-gold" />
+                <span
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border font-bold text-xs whitespace-nowrap transition-colors ${
+                    agent === "미정"
+                      ? "bg-white/5 border-white/15 text-gray-400"
+                      : "bg-gold/15 border-gold/30 text-gold"
+                  }`}
+                >
+                  <UserCheck className="w-3 h-3 text-current" />
                   담당: {agent}
                 </span>
                 <span className="font-mono font-bold text-white bg-white/5 border border-white/10 px-2.5 py-1 rounded text-xs whitespace-nowrap">
@@ -632,20 +860,46 @@ export function EditPlayerModal({
             <button
               type="button"
               onClick={onClose}
-              className="h-10 px-5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 text-sm font-semibold transition-all cursor-pointer whitespace-nowrap flex items-center justify-center"
+              disabled={isSubmitting}
+              className="h-10 px-5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 text-sm font-semibold transition-all cursor-pointer whitespace-nowrap flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
             >
               취소
             </button>
             <button
               type="button"
               onClick={handleSave}
-              className="h-10 px-6 rounded-lg bg-gold hover:bg-yellow-400 text-black text-sm font-bold shadow-lg shadow-gold/20 transition-all cursor-pointer whitespace-nowrap flex items-center justify-center active:scale-[0.98]"
+              disabled={isSubmitting || !name.trim()}
+              className="h-10 px-6 rounded-lg bg-gold hover:bg-yellow-400 text-black text-sm font-bold shadow-lg shadow-gold/20 disabled:opacity-40 transition-all cursor-pointer whitespace-nowrap flex items-center justify-center active:scale-[0.98] gap-2 disabled:cursor-not-allowed"
             >
-              수정 완료
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-black" />
+                  <span>수정 내용 저장 중...</span>
+                </>
+              ) : (
+                <span>수정 완료</span>
+              )}
             </button>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+export function EditPlayerModal({
+  player,
+  isOpen,
+  onClose,
+  onSave
+}: EditPlayerModalProps) {
+  if (!isOpen || !player) return null;
+
+  return (
+    <EditPlayerModalContent
+      player={player}
+      onClose={onClose}
+      onSave={onSave}
+    />
   );
 }

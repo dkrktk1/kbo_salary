@@ -263,6 +263,88 @@ export function extractWarFromObject(obj: any): number {
 }
 
 /**
+ * 평균자책점 (ERA) 파서
+ */
+export function parsePlayerEra(rawEra: any): number | undefined {
+  if (rawEra === undefined || rawEra === null || rawEra === "" || rawEra === "-") return undefined;
+  const num = typeof rawEra === "number" ? rawEra : parseFloat(String(rawEra).replace(/[^0-9.-]/g, ""));
+  if (isNaN(num) || num < 0) return undefined;
+  return Number(num.toFixed(2));
+}
+
+/**
+ * WHIP 파서
+ */
+export function parsePlayerWhip(rawWhip: any): number | undefined {
+  if (rawWhip === undefined || rawWhip === null || rawWhip === "" || rawWhip === "-") return undefined;
+  const num = typeof rawWhip === "number" ? rawWhip : parseFloat(String(rawWhip).replace(/[^0-9.-]/g, ""));
+  if (isNaN(num) || num < 0) return undefined;
+  return Number(num.toFixed(2));
+}
+
+/**
+ * 승/홀/세 파서
+ */
+export function parsePlayerWls(rawWls: any): string | undefined {
+  if (rawWls === undefined || rawWls === null || rawWls === "" || rawWls === "-") return undefined;
+  if (typeof rawWls === "string") return rawWls.trim();
+  return String(rawWls);
+}
+
+/**
+ * 임의의 객체에서 ERA 값 추출
+ */
+export function extractEraFromObject(obj: any): number | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const val = getValue(obj, ["ERA", "era", "평균자책점", "평균자책", "평자", "자책점"]);
+  return parsePlayerEra(val);
+}
+
+/**
+ * 임의의 객체에서 WHIP 값 추출
+ */
+export function extractWhipFromObject(obj: any): number | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const val = getValue(obj, ["WHIP", "whip", "Whip", "이닝당출루허용률"]);
+  return parsePlayerWhip(val);
+}
+
+/**
+ * 임의의 객체에서 승/홀/세 값 추출
+ */
+export function extractWlsFromObject(obj: any): string | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const directVal = getValue(obj, [
+    "승/홀/세",
+    "승/패/세",
+    "승패세",
+    "승홀세",
+    "wls",
+    "WLS",
+    "기록",
+    "성적",
+    "W-L-S",
+    "W-H-S"
+  ]);
+  if (directVal) return String(directVal).trim();
+
+  // 개별 키 조합 시도
+  const w = getValue(obj, ["승", "승리", "W", "wins", "win"]);
+  const l = getValue(obj, ["패", "패전", "L", "losses", "loss"]);
+  const h = getValue(obj, ["홀드", "홀", "H", "holds", "hold"]);
+  const s = getValue(obj, ["세이브", "세", "S", "saves", "save"]);
+
+  const parts: string[] = [];
+  if (w !== undefined && w !== null && w !== "" && w !== "-") parts.push(`${w}승`);
+  if (l !== undefined && l !== null && l !== "" && l !== "-") parts.push(`${l}패`);
+  if (h !== undefined && h !== null && h !== "" && h !== "-") parts.push(`${h}홀`);
+  if (s !== undefined && s !== null && s !== "" && s !== "-") parts.push(`${s}세`);
+
+  if (parts.length > 0) return parts.join(" ");
+  return undefined;
+}
+
+/**
  * API 응답 JSON으로부터 선수의 기록 및 history 배열을 추출하여 단일 레코드 목록으로 정규화
  */
 function extractRecordsFromResponse(j: any, trimmedName: string, targetTeam?: string): {
@@ -570,6 +652,9 @@ export function convertDbToPlayer(
       const yHr = parsePlayerHr(raw.홈런 ?? raw.HR ?? raw.hr ?? raw.Hr) ?? 0;
       const yWar = parsePlayerWar(raw["핵심 스탯(WAR)"] !== undefined ? raw["핵심 스탯(WAR)"] : (raw.WAR !== undefined ? raw.WAR : raw.war));
       const ySalary = parsePlayerSalary(raw["현재 연봉"] ?? raw["현재연봉"] ?? raw.연봉 ?? raw.salary);
+      const yEra = extractEraFromObject(raw);
+      const yWhip = extractWhipFromObject(raw);
+      const yWls = extractWlsFromObject(raw);
 
       stats.push({
         year,
@@ -577,6 +662,9 @@ export function convertDbToPlayer(
         ops: yOps,
         war: yWar,
         hr: yHr,
+        era: yEra,
+        whip: yWhip,
+        wls: yWls,
         salary: ySalary
       });
     } else {
@@ -606,7 +694,7 @@ export function convertDbToPlayer(
     draftYear: draftInfo.draftYear,
     serviceTime,
     contractPeriod: fallbackBase?.contractPeriod || "25년 01월 01일 ~ 27년 12월 31일",
-    agent: fallbackBase?.agent || latestRecord["담당 에이전트"] || latestRecord["에이전트"] || "이세인",
+    agent: fallbackBase?.agent || latestRecord["에이전트"] || latestRecord["담당 에이전트"] || "미정",
     stats: stats.length > 0 ? stats : (fallbackBase?.stats || [])
   };
 }
@@ -754,7 +842,7 @@ export function parseServiceTime(rawService: any): string {
  * 구단명을 기준으로 구글 스프레드시트 5개 시트 JOIN DB에서 해당 구단 소속 선수 전체 로스터 조회
  */
 export async function fetchTeamRosterFromDatabase(teamName: string): Promise<DbTeamRosterResult> {
-  const trimmed = teamName.trim();
+  const trimmed = (teamName || "").trim();
   if (!trimmed) {
     return {
       success: false,
@@ -765,20 +853,49 @@ export async function fetchTeamRosterFromDatabase(teamName: string): Promise<DbT
   }
 
   try {
-    const timestamp = new Date().getTime();
-    // 환경 변수 없이 직접 배포된 구글 Apps Script Web App URL 하드코딩 적용
-    const url = `https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?team=${encodeURIComponent(trimmed)}&t=${timestamp}`;
-    const response = await fetch(url);
+    let rawList: any[] = [];
+    let fetchSucceeded = false;
 
-    if (!response.ok) {
-      throw new Error(`DB 통신 오류 (HTTP ${response.status})`);
+    // 1. 백엔드 프록시 캐시 우선 시도 (로컬 Node/Cloud Run 환경)
+    try {
+      const proxyRes = await fetch(`/api/db/team-roster?team=${encodeURIComponent(trimmed)}`);
+      if (proxyRes.ok) {
+        const proxyJson = await proxyRes.json();
+        if (proxyJson && proxyJson.success && Array.isArray(proxyJson.data) && proxyJson.data.length > 0) {
+          rawList = proxyJson.data;
+          fetchSucceeded = true;
+        }
+      }
+    } catch {
+      // 프록시 호출 실패 시 직접 GAS URL로 진행
     }
 
-    const json = await response.json();
+    // 2. 프록시 실패 또는 미지원 환경일 때 구글 Apps Script Web App 직접 호출
+    if (!fetchSucceeded) {
+      const timestamp = new Date().getTime();
+      const shortName = trimmed.replace(/(트윈스|위즈|랜더스|다이노스|베어스|타이거즈|라이온즈|히어로즈|이글스|자이언츠)/g, "").trim();
+      const candidateNames = Array.from(new Set([shortName, trimmed])).filter(Boolean);
 
-    if (json && (json.status === "success" || Array.isArray(json.data) || Array.isArray(json))) {
-      const rawList = Array.isArray(json.data) ? json.data : (Array.isArray(json) ? json : []);
-      
+      for (const name of candidateNames) {
+        try {
+          const url = `https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec?team=${encodeURIComponent(name)}&t=${timestamp}`;
+          const response = await fetch(url);
+          if (response.ok) {
+            const json = await response.json();
+            const list = Array.isArray(json?.data) ? json.data : (Array.isArray(json) ? json : []);
+            if (list.length > 0) {
+              rawList = list;
+              fetchSucceeded = true;
+              break;
+            }
+          }
+        } catch (e: any) {
+          console.log(`[DB] '${name}' 직접 조회 시도 안내:`, e?.message);
+        }
+      }
+    }
+
+    if (rawList.length > 0) {
       const parsedPlayers: DbTeamPlayer[] = rawList.map((r: any, idx: number) => {
         const pId = String(r.playerId || r.id || `p_${idx}`);
         
@@ -833,16 +950,16 @@ export async function fetchTeamRosterFromDatabase(teamName: string): Promise<DbT
         success: false,
         teamName: trimmed,
         players: [],
-        error: json?.error || `'${trimmed}' 구단의 선수 데이터가 DB에 등록되어 있지 않습니다.`
+        error: `'${trimmed}' 구단의 선수 데이터가 DB에 등록되어 있지 않습니다.`
       };
     }
   } catch (err: any) {
-    console.error("DB Team Fetch Error:", err);
+    console.warn("DB Team Fetch Warning:", err?.message || err);
     return {
       success: false,
       teamName: trimmed,
       players: [],
-      error: `DB 연결 실패: ${err.message || "네트워크 상태를 확인해주세요."}`
+      error: `DB 연결 실패: ${err?.message || "네트워크 상태를 확인해주세요."}`
     };
   }
 }
@@ -852,78 +969,52 @@ export interface DbSavePlayerPayload {
   "구단": string;
   "포지션": string;
   "나이": number;
-  "타율": number;
-  "OPS": number;
-  "홈런": number;
+  "타율"?: number;
+  "OPS"?: number;
+  "홈런"?: number;
+  "ERA"?: number;
+  "WHIP"?: number;
+  "승/홀/세"?: string;
   "최근 WAR": number;
   "현재 연봉": number;
   "에이전트 계약기간 관리": string;
+  "에이전트"?: string;
   "담당 에이전트"?: string;
+  [key: string]: any;
 }
 
 /**
  * 선수 데이터 영구 저장 처리 (구글 스프레드시트 백엔드 연동 및 로컬 보관)
- * GitHub Pages 정적 배포 및 로컬/컨테이너 환경 모두 지원
+ * 단일 전송 원칙을 적용하여 중복 저장 방지
  */
 export async function savePlayerToDatabase(payload: DbSavePlayerPayload): Promise<{ success: boolean; remoteSaved?: boolean; data?: any; error?: string }> {
   const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
   let remoteSaved = false;
 
   try {
-    console.log("🚀 선수 데이터 등록 요청:", payload);
+    console.log('DB 전송 데이터:', payload);
 
-    // 1. 만약 백엔드 프록시가 존재하는 환경(AI Studio / 로컬 Node 서버)이면 서버 경유 시도
-    let serverHandled = false;
-    try {
-      const response = await fetch("/api/db/save-player", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (response.ok) {
-        const resData = await response.json();
-        remoteSaved = !!resData.remoteSaved;
-        serverHandled = true;
-        return {
-          success: true,
-          remoteSaved,
-          data: resData.data,
-        };
-      }
-    } catch {
-      // 정적 호스팅(GitHub Pages 등) 환경에서는 /api 엔드포인트가 없으므로 통과
-    }
-
-    // 2. 정적 호스팅(GitHub Pages) 등 서버가 없는 환경에서는 하드코딩된 구글 Apps Script Web App URL로 직접 전송 시도
-    if (!serverHandled) {
-      try {
-        await fetch(GAS_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "text/plain;charset=utf-8",
-          },
-          body: JSON.stringify(payload),
-          mode: "no-cors",
-        });
-        remoteSaved = true;
-      } catch (directErr) {
-        console.warn("직접 구글 Apps Script POST 전송 시도 결과:", directErr);
-      }
-    }
+    // 단일 POST 요청 전송
+    await fetch(GAS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain;charset=utf-8",
+      },
+      body: JSON.stringify(payload),
+      mode: "no-cors",
+    });
+    remoteSaved = true;
 
     return {
       success: true,
       remoteSaved,
     };
-  } catch (err: any) {
-    console.warn("선수 저장 완료 (로컬 보관):", err);
+  } catch (error: any) {
+    console.error('DB 저장 실패:', error);
     return {
       success: true,
       remoteSaved: false,
-      error: err?.message,
+      error: error?.message,
     };
   }
 }

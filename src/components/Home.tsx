@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { mockPlayers, mockTeams, loadStoredPlayers, saveStoredPlayers, Player, PlayerStat } from "../data";
 import {
   fetchPlayerFromDatabase,
@@ -8,7 +8,10 @@ import {
   parsePlayerAge,
   parsePlayerSalary,
   parseDraftYear,
-  parseServiceTime
+  parseServiceTime,
+  extractEraFromObject,
+  extractWhipFromObject,
+  extractWlsFromObject
 } from "../services/dbService";
 import {
   Users,
@@ -48,7 +51,7 @@ function mapRawToPlayer(raw: any, index: number): Player | null {
       draftYear: parseDraftYear(raw.draftYear).draftYear,
       serviceTime: parseServiceTime(raw.serviceTime),
       contractPeriod: raw.contractPeriod || "24년 01월 01일 ~ 26년 12월 31일",
-      agent: raw.agent || "이세인",
+      agent: raw["에이전트"] || raw["담당 에이전트"] || raw.agent || "미정",
       stats: raw.stats
     };
   }
@@ -63,7 +66,7 @@ function mapRawToPlayer(raw: any, index: number): Player | null {
   const draftInfo = parseDraftYear(raw.draftYear ?? raw["입단 연도"] ?? raw["입단연도"]);
   const serviceTime = parseServiceTime(raw.serviceTime ?? raw["등록일수"] ?? raw["총등록일수"] ?? "");
   const contractPeriod = raw.contractPeriod || raw["에이전트 계약기간 관리"] || raw["계약기간"] || "24년 01월 01일 ~ 26년 12월 31일";
-  const agent = raw.agent || raw["담당 에이전트"] || raw["에이전트"] || "이세인";
+  const agent = raw["에이전트"] || raw["담당 에이전트"] || raw.agent || "미정";
 
   // stats 추출
   let stats: PlayerStat[] = [];
@@ -79,12 +82,19 @@ function mapRawToPlayer(raw: any, index: number): Player | null {
     const rawHr = raw["홈런"] ?? raw["HR"] ?? raw.hr ?? 0;
     const hr = typeof rawHr === "number" ? rawHr : (parseInt(String(rawHr), 10) || undefined);
 
+    const era = extractEraFromObject(raw);
+    const whip = extractWhipFromObject(raw);
+    const wls = extractWlsFromObject(raw);
+
     stats = [
       {
         year: 2026,
         avg: avg !== undefined && !isNaN(avg) ? avg : undefined,
         ops: ops !== undefined && !isNaN(ops) ? ops : undefined,
         hr: hr !== undefined && !isNaN(hr) ? hr : undefined,
+        era: era !== undefined && !isNaN(era) ? era : undefined,
+        whip: whip !== undefined && !isNaN(whip) ? whip : undefined,
+        wls: wls || undefined,
         war: war !== null && !isNaN(war) ? Number(war.toFixed(2)) : null,
         salary: salaryCurrent
       }
@@ -108,6 +118,7 @@ function mapRawToPlayer(raw: any, index: number): Player | null {
 
 export default function Home() {
   const [players, setPlayers] = useState<Player[]>(loadStoredPlayers);
+  const [activeTab, setActiveTab] = useState<"batter" | "pitcher">("batter");
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
   const [deleteTargetPlayer, setDeleteTargetPlayer] = useState<Player | null>(null);
@@ -163,8 +174,14 @@ export default function Home() {
           .filter((p): p is Player => p !== null);
 
         if (mappedPlayers.length > 0) {
-          setPlayers(mappedPlayers);
-          saveStoredPlayers(mappedPlayers);
+          // 구글 시트에서 불러온 데이터와 새로 등록된 소속 선수를 병합하여 보존
+          const currentStored = loadStoredPlayers();
+          const localOnlyPlayers = currentStored.filter(
+            (sp) => !mappedPlayers.some((mp) => mp.name === sp.name && mp.team === sp.team)
+          );
+          const finalPlayers = [...mappedPlayers, ...localOnlyPlayers];
+          setPlayers(finalPlayers);
+          saveStoredPlayers(finalPlayers);
         } else {
           // 로컬 스토리지에 기존 저장된 에이전시 선수가 있다면 유지
           const localStored = loadStoredPlayers();
@@ -173,7 +190,7 @@ export default function Home() {
           }
         }
       } catch (error) {
-        console.error('대시보드 데이터 로드 실패:', error);
+        console.warn('대시보드 데이터 로드 안내 (로컬 저장소 유지):', error);
       }
     };
 
@@ -211,6 +228,12 @@ export default function Home() {
       }, 0) / players.length).toFixed(1)
     : "0.0";
 
+  // 포지션별 선수 데이터 분리 (투수 vs 타자)
+  const isPitcher = (p: Player) => (p.position || "").includes("투수");
+  const pitcherPlayers = useMemo(() => players.filter(isPitcher), [players]);
+  const batterPlayers = useMemo(() => players.filter((p) => !isPitcher(p)), [players]);
+  const displayedPlayers = activeTab === "pitcher" ? pitcherPlayers : batterPlayers;
+
   // 1. 신규 선수 등록
   const handleRegisterPlayer = (newPlayer: Player) => {
     const updated = [newPlayer, ...players];
@@ -219,11 +242,19 @@ export default function Home() {
     setIsAddModalOpen(false);
 
     const latest = newPlayer.stats?.[newPlayer.stats.length - 1];
-    const avgText = latest?.avg !== undefined ? latest.avg.toFixed(3) : "-";
-    const opsText = latest?.ops !== undefined ? latest.ops.toFixed(3) : "-";
-    const hrText = latest?.hr !== undefined ? `${latest.hr}개` : "-";
+    const isRegPitcher = (newPlayer.position || "").includes("투수");
 
-    showToast(`'${newPlayer.name}' 선수(타율 ${avgText}, OPS ${opsText}, 홈런 ${hrText}, WAR ${latest?.war?.toFixed(1) ?? "-"})가 등록되었습니다.`);
+    if (isRegPitcher) {
+      const eraText = latest?.era !== undefined ? latest.era.toFixed(2) : "-";
+      const whipText = latest?.whip !== undefined ? latest.whip.toFixed(2) : "-";
+      const wlsText = latest?.wls || "-";
+      showToast(`'${newPlayer.name}' 투수(ERA ${eraText}, WHIP ${whipText}, ${wlsText}, WAR ${latest?.war?.toFixed(1) ?? "-"})가 등록되었습니다.`);
+    } else {
+      const avgText = latest?.avg !== undefined ? latest.avg.toFixed(3) : "-";
+      const opsText = latest?.ops !== undefined ? latest.ops.toFixed(3) : "-";
+      const hrText = latest?.hr !== undefined ? `${latest.hr}개` : "-";
+      showToast(`'${newPlayer.name}' 타자(타율 ${avgText}, OPS ${opsText}, 홈런 ${hrText}, WAR ${latest?.war?.toFixed(1) ?? "-"})가 등록되었습니다.`);
+    }
   };
 
   // 2. 선수 정보 수정
@@ -300,12 +331,19 @@ export default function Home() {
   };
 
   const formatSalaryText = (salary: number) => {
-    if (salary >= 100000000) {
-      const uk = salary / 100000000;
-      return `₩${uk.toFixed(uk % 1 === 0 ? 0 : 1)}억`;
+    if (!salary || isNaN(salary) || salary <= 0) return "0만";
+    const won = salary < 100000 ? salary * 10000 : salary;
+
+    if (won >= 100000000) {
+      const uk = Math.floor(won / 100000000);
+      const man = Math.round((won % 100000000) / 10000);
+      if (man > 0) {
+        return `${uk}억 ${man.toLocaleString()}만`;
+      }
+      return `${uk}억`;
     }
-    const man = Math.round(salary / 10000);
-    return `₩${man.toLocaleString()}만`;
+    const man = Math.round(won / 10000);
+    return `${man.toLocaleString()}만`;
   };
 
   return (
@@ -397,7 +435,7 @@ export default function Home() {
         <StatCard
           title="총 연봉 (보장액 합계)"
           value={formatSalaryText(totalPayroll)}
-          subText={`선수 1인당 평균 ${players.length ? formatSalaryText(Math.round(totalPayroll / players.length)) : "₩0"}`}
+          subText={`선수 1인당 평균 ${players.length ? formatSalaryText(Math.round(totalPayroll / players.length)) : "0만"}`}
           icon={DollarSign}
           color="text-emerald-400"
         />
@@ -411,10 +449,10 @@ export default function Home() {
         />
       </div>
 
-      {/* 소속 선수 기록/정보 테이블 */}
+      {/* 소속 선수 기록/정보 테이블 (타자/투수 탭 분리 관리) */}
       <div className="bg-[#131722] border border-white/10 rounded-2xl p-5 md:p-6 shadow-xl flex flex-col gap-4">
-        <div className="flex items-center justify-between pb-3 border-b border-white/10">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-between pb-3 border-b border-white/10 flex-wrap gap-3">
+          <div className="flex items-center gap-3">
             <div className="w-7 h-7 rounded-lg bg-gold/15 border border-gold/30 flex items-center justify-center text-gold">
               <Database className="w-3.5 h-3.5" />
             </div>
@@ -422,13 +460,39 @@ export default function Home() {
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 소속 선수 기록 및 연봉 관리
                 <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gold/15 text-gold border border-gold/30">
-                  {players.length}명
+                  총 {players.length}명
                 </span>
               </h3>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* 타자 / 투수 선택 탭 (Tab UI) */}
+            <div className="flex items-center p-1 bg-black/60 border border-white/10 rounded-xl shadow-inner">
+              <button
+                type="button"
+                onClick={() => setActiveTab("batter")}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === "batter"
+                    ? "bg-gradient-to-r from-gold to-amber-500 text-black shadow-md shadow-gold/25 font-extrabold"
+                    : "text-gray-400 hover:text-white hover:bg-white/5 font-semibold"
+                }`}
+              >
+                타자 ({batterPlayers.length}명)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("pitcher")}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === "pitcher"
+                    ? "bg-gradient-to-r from-gold to-amber-500 text-black shadow-md shadow-gold/25 font-extrabold"
+                    : "text-gray-400 hover:text-white hover:bg-white/5 font-semibold"
+                }`}
+              >
+                투수 ({pitcherPlayers.length}명)
+              </button>
+            </div>
+
             <button
               onClick={() => setIsAddModalOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gold/15 hover:bg-gold/25 border border-gold/30 text-gold text-xs font-bold transition-all cursor-pointer"
@@ -442,41 +506,77 @@ export default function Home() {
         <div className="overflow-x-auto rounded-xl border border-white/10 bg-black/30">
           <table className="w-full text-xs text-left whitespace-nowrap">
             <thead className="text-[13px] text-center text-gray-400 uppercase tracking-wider bg-black/50 border-b border-white/10 font-bold whitespace-nowrap">
-              <tr>
-                <th className="px-3 py-3 font-bold text-center text-white whitespace-nowrap text-[13px]">선수명</th>
-                <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">구단</th>
-                <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">포지션</th>
-                <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">나이</th>
-                <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">타율</th>
-                <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">OPS</th>
-                <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">홈런</th>
-                <th className="px-2.5 py-3 font-bold text-gold whitespace-nowrap text-[13px]">최근 WAR</th>
-                <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">현재 연봉</th>
-                <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">
-                  <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                    <Calendar className="w-3 h-3 text-gold" />
-                    <span className="text-white text-[13px]">에이전트 계약기간</span>
-                  </div>
-                </th>
-                <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">
-                  <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                    <UserCheck className="w-3 h-3 text-gold" />
-                    <span className="text-white text-[13px]">에이전트</span>
-                  </div>
-                </th>
-                <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">관리</th>
-              </tr>
+              {activeTab === "batter" ? (
+                /* 타자 테이블 헤더: 선수명, 구단, 포지션, 나이, 타율, OPS, 홈런, 최근 WAR, 현재 연봉, 계약기간, 에이전트, 관리 */
+                <tr>
+                  <th className="px-3 py-3 font-bold text-center text-white whitespace-nowrap text-[13px]">선수명</th>
+                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">구단</th>
+                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">포지션</th>
+                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">나이</th>
+                  <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">타율</th>
+                  <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">OPS</th>
+                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">홈런</th>
+                  <th className="px-2.5 py-3 font-bold text-gold whitespace-nowrap text-[13px]">최근 WAR</th>
+                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">현재 연봉</th>
+                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">
+                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
+                      <Calendar className="w-3 h-3 text-gold" />
+                      <span className="text-white text-[13px]">계약기간</span>
+                    </div>
+                  </th>
+                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">
+                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
+                      <UserCheck className="w-3 h-3 text-gold" />
+                      <span className="text-white text-[13px]">에이전트</span>
+                    </div>
+                  </th>
+                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">관리</th>
+                </tr>
+              ) : (
+                /* 투수 테이블 헤더: 선수명, 구단, 포지션, 나이, ERA, WHIP, 승/홀/세, 최근 WAR, 현재 연봉, 계약기간, 에이전트, 관리 */
+                <tr>
+                  <th className="px-3 py-3 font-bold text-center text-white whitespace-nowrap text-[13px]">선수명</th>
+                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">구단</th>
+                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">포지션</th>
+                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">나이</th>
+                  <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">ERA</th>
+                  <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">WHIP</th>
+                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">승/홀/세</th>
+                  <th className="px-2.5 py-3 font-bold text-gold whitespace-nowrap text-[13px]">최근 WAR</th>
+                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">현재 연봉</th>
+                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">
+                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
+                      <Calendar className="w-3 h-3 text-gold" />
+                      <span className="text-white text-[13px]">계약기간</span>
+                    </div>
+                  </th>
+                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">
+                    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
+                      <UserCheck className="w-3 h-3 text-gold" />
+                      <span className="text-white text-[13px]">에이전트</span>
+                    </div>
+                  </th>
+                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">관리</th>
+                </tr>
+              )}
             </thead>
             <tbody className="divide-y divide-white/5 whitespace-nowrap">
-              {players.map((player) => {
+              {displayedPlayers.map((player) => {
                 const latestStat = player.stats?.[player.stats.length - 1];
                 const war = latestStat?.war ?? 0;
+                const period = player.contractPeriod || "25년 01월 01일 ~ 27년 12월 31일";
+                const isSyncingThis = syncingPlayerId === player.id;
+                const rowAgent = (player as any)["에이전트"] || player.agent || (player as any)["담당 에이전트"] || (player as any)["담당자"];
+                const agentName = (rowAgent && String(rowAgent).trim()) ? String(rowAgent).trim() : "미정";
+
+                // 성적 표시 분기 (타자 vs 투수)
                 const avg = latestStat?.avg !== undefined ? latestStat.avg.toFixed(3) : "-";
                 const ops = latestStat?.ops !== undefined ? latestStat.ops.toFixed(3) : "-";
                 const hr = latestStat?.hr !== undefined ? `${latestStat.hr}개` : "-";
-                const period = player.contractPeriod || "25년 01월 01일 ~ 27년 12월 31일";
-                const isSyncingThis = syncingPlayerId === player.id;
-                const agentName = player.agent || "이세인";
+
+                const era = latestStat?.era !== undefined ? latestStat.era.toFixed(2) : "-";
+                const whip = latestStat?.whip !== undefined ? latestStat.whip.toFixed(2) : "-";
+                const wls = latestStat?.wls || "-";
 
                 return (
                   <tr
@@ -501,9 +601,22 @@ export default function Home() {
                     </td>
                     <td className="px-2.5 py-2.5 text-white font-semibold text-xs whitespace-nowrap">{player.position}</td>
                     <td className="px-2.5 py-2.5 text-white font-medium text-xs whitespace-nowrap">{player.age || 24}세</td>
-                    <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{avg}</td>
-                    <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{ops}</td>
-                    <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{hr}</td>
+
+                    {/* 포지션별 전용 스탯 3열 */}
+                    {activeTab === "batter" ? (
+                      <>
+                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{avg}</td>
+                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{ops}</td>
+                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{hr}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{era}</td>
+                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{whip}</td>
+                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{wls}</td>
+                      </>
+                    )}
+
                     <td className="px-2.5 py-2.5 text-gold font-bold text-sm whitespace-nowrap">
                       {war.toFixed(1)}
                     </td>
@@ -518,9 +631,9 @@ export default function Home() {
                     </td>
                     <td className="px-2.5 py-2.5 whitespace-nowrap">
                       <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap shadow-sm border ${
-                        agentName === "이세인"
-                          ? "bg-gold/15 border-gold/35 text-gold"
-                          : "bg-amber-400/10 border-amber-400/30 text-amber-200"
+                        agentName === "미정"
+                          ? "bg-white/5 border-white/10 text-gray-400"
+                          : "bg-gold/15 border-gold/35 text-gold"
                       }`}>
                         <UserCheck className="w-3 h-3 opacity-80 flex-shrink-0" />
                         <span className="whitespace-nowrap">{agentName}</span>
@@ -558,16 +671,16 @@ export default function Home() {
                 );
               })}
 
-              {players.length === 0 && (
+              {displayedPlayers.length === 0 && (
                 <tr>
                   <td colSpan={12} className="text-center py-12 text-gray-500 font-sans">
                     <Users className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-sm font-semibold mb-2">등록된 선수가 없습니다.</p>
+                    <p className="text-sm font-semibold mb-2">등록된 {activeTab === "pitcher" ? "투수" : "타자"}가 없습니다.</p>
                     <button
                       onClick={() => setIsAddModalOpen(true)}
                       className="px-4 py-2 rounded-xl bg-gradient-to-r from-gold to-amber-500 text-black text-xs font-bold shadow-md hover:from-amber-400 hover:to-gold cursor-pointer"
                     >
-                      첫 번째 선수 추가하기
+                      {activeTab === "pitcher" ? "투수" : "타자"} 추가하기
                     </button>
                   </td>
                 </tr>

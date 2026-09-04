@@ -3,6 +3,45 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function() {
+        try {
+          var origFetch = window.fetch;
+          var curFetch = typeof origFetch === 'function' ? origFetch.bind(window) : origFetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() {
+              return curFetch;
+            },
+            set: function(val) {
+              curFetch = val;
+            },
+            configurable: true,
+            enumerable: true
+          });
+
+          var proto = window.Window ? window.Window.prototype : (window.__proto__ || null);
+          if (proto && proto !== window) {
+            try {
+              var protoDesc = Object.getOwnPropertyDescriptor(proto, 'fetch');
+              if (protoDesc && protoDesc.configurable) {
+                Object.defineProperty(proto, 'fetch', {
+                  get: function() {
+                    return curFetch;
+                  },
+                  set: function(val) {
+                    curFetch = val;
+                  },
+                  configurable: true,
+                  enumerable: true
+                });
+              }
+            } catch (err) {}
+          }
+        } catch (e) {
+          console.warn('Fetch setter patch failed:', e);
+        }
+      })();
+    </script>
     <title>KBO Agency Dashboard</title>
     <meta name="description" content="KBO baseball agency dashboard for salary negotiation and player management with AI insights." />
     <meta property="og:title" content="KBO Agency Dashboard" />
@@ -15,21 +54,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <script>
-      try {
-        const desc = Object.getOwnPropertyDescriptor(window, 'fetch');
-        if (desc && !desc.set && desc.configurable) {
-          const originalFetch = window.fetch;
-          Object.defineProperty(window, 'fetch', {
-            get: function() { return originalFetch; },
-            set: function(val) { console.warn('Ignored attempt to overwrite window.fetch'); },
-            configurable: true
-          });
-        }
-      } catch (e) {
-        console.error('Failed to patch fetch:', e);
-      }
-    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

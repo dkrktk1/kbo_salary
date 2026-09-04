@@ -306,6 +306,62 @@ app.post("/api/db/save-player", async (req, res) => {
   }
 });
 
+// In-memory cache for team rosters to prevent excessive concurrent hits to Google Apps Script
+const teamRosterCache = new Map<string, { data: any[]; timestamp: number }>();
+const ROSTER_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+const KBO_SHORT_TEAMS: Record<string, string> = {
+  "LG 트윈스": "LG",
+  "KT 위즈": "KT",
+  "SSG 랜더스": "SSG",
+  "NC 다이노스": "NC",
+  "두산 베어스": "두산",
+  "KIA 타이거즈": "KIA",
+  "삼성 라이온즈": "삼성",
+  "키움 히어로즈": "키움",
+  "한화 이글스": "한화",
+  "롯데 자이언츠": "롯데",
+};
+
+app.get("/api/db/team-roster", async (req, res) => {
+  const team = String(req.query.team || "").trim();
+  if (!team) {
+    return res.status(400).json({ success: false, error: "구단명이 필요합니다." });
+  }
+
+  const cached = teamRosterCache.get(team);
+  if (cached && Date.now() - cached.timestamp < ROSTER_CACHE_TTL) {
+    return res.json({ success: true, fromCache: true, data: cached.data });
+  }
+
+  const GAS_DB_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+  const shortName = KBO_SHORT_TEAMS[team] || team.replace(/(트윈스|위즈|랜더스|다이노스|베어스|타이거즈|라이온즈|히어로즈|이글스|자이언츠)/g, "").trim();
+  
+  // 구글 Apps Script DB는 축약 구단명(LG, KIA, 롯데 등)으로 정확하게 매칭되므로 shortName을 최우선 조회
+  const candidateNames = Array.from(new Set([shortName, team])).filter(Boolean);
+
+  for (const name of candidateNames) {
+    try {
+      const url = `${GAS_DB_URL}?team=${encodeURIComponent(name)}&t=${Date.now()}`;
+      const response = await fetch(url, { signal: AbortSignal.timeout(12000) });
+      if (response.ok) {
+        const json: any = await response.json();
+        const rawList = Array.isArray(json?.data) ? json.data : (Array.isArray(json) ? json : []);
+        if (rawList.length > 0) {
+          teamRosterCache.set(team, { data: rawList, timestamp: Date.now() });
+          return res.json({ success: true, data: rawList });
+        }
+      }
+    } catch (e: any) {
+      console.log(`[Proxy] GAS fetch notice for team '${name}':`, e?.message);
+    }
+  }
+
+  // Cache empty result for 1 minute to prevent thundering herd
+  teamRosterCache.set(team, { data: [], timestamp: Date.now() - ROSTER_CACHE_TTL + 60000 });
+  return res.json({ success: true, data: [] });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

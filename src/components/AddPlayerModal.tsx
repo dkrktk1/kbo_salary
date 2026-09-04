@@ -13,7 +13,14 @@ import {
   parsePlayerOps,
   parsePlayerHr,
   parsePlayerWar,
-  DbFetchResult
+  parsePlayerEra,
+  parsePlayerWhip,
+  parsePlayerWls,
+  extractEraFromObject,
+  extractWhipFromObject,
+  extractWlsFromObject,
+  DbFetchResult,
+  DbSavePlayerPayload
 } from "../services/dbService";
 import {
   Database,
@@ -75,11 +82,14 @@ export function AddPlayerModal({
   const [serviceTime, setServiceTime] = useState<string>("");
   const [salaryManwon, setSalaryManwon] = useState<number | "">(""); // 만원 단위
 
-  // 2. 2026 핵심 지표 (검색 전까지 공란)
-  const [avg, setAvg] = useState<number | "">("");
-  const [ops, setOps] = useState<number | "">("");
+  // 2. 2026 핵심 지표 (검색 전까지 공란 - 타자 및 투수 분기)
+  const [avg, setAvg] = useState<string>("");
+  const [ops, setOps] = useState<string>("");
   const [hr, setHr] = useState<number | "">("");
   const [war, setWar] = useState<number | "">("");
+  const [era, setEra] = useState<number | "">("");
+  const [whip, setWhip] = useState<number | "">("");
+  const [wls, setWls] = useState<string>("");
 
   // 3. 에이전트 계약기간 및 담당 에이전트 (기본값 2026년 기준 1년, 담당 이세인)
   const [agent, setAgent] = useState<string>("이세인");
@@ -107,6 +117,7 @@ export function AddPlayerModal({
   // 5. DB 통신 상태
   const [isDbFetching, setIsDbFetching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
   const [dbNotice, setDbNotice] = useState<{ type: "success" | "warn" | "error"; msg: string } | null>(null);
   const [lastFetchedResult, setLastFetchedResult] = useState<DbFetchResult | null>(null);
 
@@ -115,6 +126,7 @@ export function AddPlayerModal({
     setSearchName("");
     setTeam("롯데 자이언츠");
     setPosition("");
+    setHasSearched(false);
     setAge("");
     setDraftYear("");
     setServiceTime("");
@@ -123,6 +135,9 @@ export function AddPlayerModal({
     setOps("");
     setHr("");
     setWar("");
+    setEra("");
+    setWhip("");
+    setWls("");
     setAgent("이세인");
     setContractStartDate("2026-01-01");
     setContractEndDate("2026-12-31");
@@ -195,7 +210,10 @@ export function AddPlayerModal({
         const rawHr = playerData.HR || playerData['HR'] || 0;
         const rawOps = playerData.OPS || playerData['OPS'] || 0;
         const rawWar = playerData['핵심 스탯(WAR)'] || playerData.WAR || playerData['WAR'] || 0;
-        console.log("🎯 매핑될 스탯:", { rawAvg, rawHr, rawOps, rawWar });
+        const rawEra = extractEraFromObject(playerData);
+        const rawWhip = extractWhipFromObject(playerData);
+        const rawWls = extractWlsFromObject(playerData);
+        console.log("🎯 매핑될 스탯:", { rawAvg, rawHr, rawOps, rawWar, rawEra, rawWhip, rawWls });
 
         // 기타 프로필 데이터 추출
         const resolvedTeam = playerData.팀 || playerData.구단 || playerData.소속 || playerData.team || trimmedTeam || "롯데 자이언츠";
@@ -206,17 +224,23 @@ export function AddPlayerModal({
         const resolvedSalary = parsePlayerSalary(playerData["현재 연봉"] ?? playerData["현재연봉"] ?? playerData.연봉 ?? playerData.salary);
 
         // 3. State 강제 업데이트
-        setAvg(Number(rawAvg) || 0);
-        setHr(Number(rawHr) || 0);
-        setOps(Number(rawOps) || 0);
+        const parsedAvg = parsePlayerAvg(rawAvg);
+        const parsedOps = parsePlayerOps(rawOps);
+        const avgNum = parsedAvg !== undefined ? parsedAvg : Number(rawAvg);
+        const opsNum = parsedOps !== undefined ? parsedOps : Number(rawOps);
+
         setWar(Number(rawWar) || 0);
+        setAvg(!isNaN(avgNum) && rawAvg !== "" && rawAvg !== null && rawAvg !== undefined ? avgNum.toFixed(3) : "0.000");
+        setHr(Number(rawHr) || 0);
+        setOps(!isNaN(opsNum) && rawOps !== "" && rawOps !== null && rawOps !== undefined ? opsNum.toFixed(3) : "0.000");
+        if (rawEra !== undefined) setEra(rawEra);
+        if (rawWhip !== undefined) setWhip(rawWhip);
+        if (rawWls) setWls(rawWls);
 
         setTeam(resolvedTeam);
-        if (resolvedPos) {
-          setPosition(resolvedPos);
-        } else if (!position) {
-          setPosition("외야수");
-        }
+        const finalPos = resolvedPos || position || "외야수";
+        setPosition(finalPos);
+
         setAge(resolvedAge > 0 ? resolvedAge : 0);
         setDraftYear(resolvedDraft.draftYear > 0 ? resolvedDraft.draftYear : 0);
         setServiceTime(resolvedServiceTime || "0일");
@@ -270,31 +294,44 @@ export function AddPlayerModal({
         }
 
         // 성공 배너 노출
-        const displayAvg = Number(rawAvg) || 0;
-        const displayOps = Number(rawOps) || 0;
-        const displayHr = Number(rawHr) || 0;
+        const isPitcher = finalPos.includes("투수");
         const displayWar = Number(rawWar) || 0;
+        setHasSearched(true);
 
-        setDbNotice({
-          type: "success",
-          msg: `'${trimmedName}' (${trimmedTeam}) 선수의 데이터 (타율: ${displayAvg.toFixed(3)}, OPS: ${displayOps.toFixed(3)}, 홈런: ${displayHr}개, WAR: ${displayWar.toFixed(1)}, 연봉: ${Math.round(resolvedSalary / 10000).toLocaleString()}만원)가 모달 입력 화면에 정확히 반영되었습니다.`
-        });
+        if (isPitcher) {
+          const displayEra = rawEra !== undefined ? rawEra.toFixed(2) : "-";
+          const displayWhip = rawWhip !== undefined ? rawWhip.toFixed(2) : "-";
+          const displayWls = rawWls || "-";
+          setDbNotice({
+            type: "success",
+            msg: `'${trimmedName}' (${trimmedTeam}) 투수 데이터 (ERA: ${displayEra}, WHIP: ${displayWhip}, 승/홀/세: ${displayWls}, WAR: ${displayWar.toFixed(1)}, 연봉: ${Math.round(resolvedSalary / 10000).toLocaleString()}만원)가 모달 입력 화면에 정확히 반영되었습니다.`
+          });
+        } else {
+          const displayAvg = Number(rawAvg) || 0;
+          const displayOps = Number(rawOps) || 0;
+          const displayHr = Number(rawHr) || 0;
+          setDbNotice({
+            type: "success",
+            msg: `'${trimmedName}' (${trimmedTeam}) 타자 데이터 (타율: ${displayAvg.toFixed(3)}, OPS: ${displayOps.toFixed(3)}, 홈런: ${displayHr}개, WAR: ${displayWar.toFixed(1)}, 연봉: ${Math.round(resolvedSalary / 10000).toLocaleString()}만원)가 모달 입력 화면에 정확히 반영되었습니다.`
+          });
+        }
       } else {
         // DB에 해당 선수가 없는 경우 0으로 초기화
+        setHasSearched(true);
         setAge(0);
         setDraftYear(0);
         setServiceTime("0일");
         setSalaryManwon(0);
         setWar(0);
-        setOps(0);
+        setOps("0.000");
         setHr(0);
-        setAvg(0);
+        setAvg("0.000");
         setStat2024({ avg: 0, ops: 0, hr: 0, war: 0, salaryManwon: 0 });
         setStat2025({ avg: 0, ops: 0, hr: 0, war: 0, salaryManwon: 0 });
 
         setDbNotice({
           type: "warn",
-          msg: `'${trimmedName}' 선수가 선택하신 '${trimmedTeam}' 소속 데이터에서 발견되지 않았습니다. (스탯 기본값 0 설정)`
+          msg: `'${trimmedName}' 선수가 선택하신 '${trimmedTeam}' 소속 데이터에서 발견되지 않았습니다. 상단에서 포지션을 선택하여 직접 스탯을 입력해주세요.`
         });
       }
     } catch (e: any) {
@@ -307,7 +344,15 @@ export function AddPlayerModal({
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+    }
+
+    if (isSubmitting) {
+      return;
+    }
+
     const trimmedName = searchName.trim();
     if (!trimmedName) {
       alert("선수명을 입력해주세요.");
@@ -323,8 +368,8 @@ export function AddPlayerModal({
       }
     }
 
-    const finalAvg = typeof avg === "number" ? avg : 0;
-    const finalOps = typeof ops === "number" ? ops : 0;
+    const finalAvg = avg === "" ? 0 : (parseFloat(String(avg)) || 0);
+    const finalOps = ops === "" ? 0 : (parseFloat(String(ops)) || 0);
     const finalHr = typeof hr === "number" ? hr : 0;
     const finalWar = typeof war === "number" ? war : 0;
     const finalSalaryManwon = typeof salaryManwon === "number" ? salaryManwon : 0;
@@ -338,28 +383,56 @@ export function AddPlayerModal({
       ? `${formatDateToKorean(contractStartDate)} ~ ${formatDateToKorean(contractEndDate)}`
       : "26년 01월 01일 ~ 26년 12월 31일";
 
-    // 10개 필수 키값을 가진 Body 데이터 구성 (담당 에이전트 포함)
-    const postPayload = {
+    const isPitcher = finalPosition.includes("투수");
+    const finalEra = typeof era === "number" ? era : (parseFloat(String(era)) || undefined);
+    const finalWhip = typeof whip === "number" ? whip : (parseFloat(String(whip)) || undefined);
+    const finalWls = wls.trim() || "";
+
+    // 2. 타자/투수 동적 Payload 분기 처리 (시트 헤더명 '에이전트' 및 세부 지표 일치 매핑)
+    const payload: Record<string, any> = {
       "선수명": trimmedName,
       "구단": team,
       "포지션": finalPosition,
       "나이": finalAge,
-      "타율": finalAvg,
-      "OPS": finalOps,
-      "홈런": finalHr,
-      "최근 WAR": finalWar,
+      // 타자 스탯 (투수면 빈칸으로 대체)
+      "타율": isPitcher ? "" : finalAvg,
+      "OPS": isPitcher ? "" : finalOps,
+      "홈런": isPitcher ? "" : finalHr,
+      // 투수 스탯 (타자면 빈칸으로 대체)
+      "ERA": isPitcher ? (finalEra !== undefined ? finalEra : "") : "",
+      "WHIP": isPitcher ? (finalWhip !== undefined ? finalWhip : "") : "",
+      "승/홀/세": isPitcher ? finalWls : "",
+      "승률": isPitcher ? finalWls : "",
+      // 공통 메타데이터
+      "최근 WAR": finalWar !== 0 ? finalWar : "",
       "현재 연봉": finalSalaryManwon,
+      "에이전트 계약기간": contractPeriodText,
       "에이전트 계약기간 관리": contractPeriodText,
-      "담당 에이전트": agent
+      "에이전트": agent,
+      "담당 에이전트": agent,
+      "관리": "",
+      "sheetName": "App_data_DB",
+      "type": "agency",
+      "action": "save"
     };
 
     setIsSubmitting(true);
-    try {
-      console.log("📤 선수 DB 등록 요청 시작:", postPayload);
 
-      // 구글 DB 및 백엔드 서버 연동 시도 (브라우저 CORS / Failed to fetch 방지)
-      const saveResult = await savePlayerToDatabase(postPayload);
-      console.log("📥 선수 등록 응답 결과:", saveResult);
+    // 구글 Apps Script Web App URL
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+
+    try {
+      console.log('DB 전송 데이터:', payload);
+
+      // 구글 Apps Script Web App으로 단일 POST 요청 전송 (중복 호출 방지)
+      await fetch(GAS_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain;charset=utf-8",
+        },
+        body: JSON.stringify(payload),
+        mode: "no-cors",
+      });
 
       const finalStats: PlayerStat[] = [
         {
@@ -380,9 +453,12 @@ export function AddPlayerModal({
         },
         {
           year: 2026,
-          avg: finalAvg,
-          ops: finalOps,
-          hr: finalHr,
+          avg: isPitcher ? undefined : finalAvg,
+          ops: isPitcher ? undefined : finalOps,
+          hr: isPitcher ? undefined : finalHr,
+          era: isPitcher ? finalEra : undefined,
+          whip: isPitcher ? finalWhip : undefined,
+          wls: isPitcher ? finalWls : undefined,
           war: finalWar,
           salary: currentSalaryWon,
         },
@@ -401,20 +477,17 @@ export function AddPlayerModal({
         agent: agent,
         stats: finalStats,
       };
+      (newPlayer as any)["에이전트"] = agent;
+      (newPlayer as any)["담당 에이전트"] = agent;
 
       // 대시보드 리스트 갱신 및 모달 닫기
       onRegister(newPlayer);
       resetForm();
       onClose();
 
-      // 등록 성공 피드백 알림
-      if (saveResult?.remoteSaved) {
-        alert(`'${trimmedName}' 선수가 구글 데이터베이스 및 소속 로스터에 성공적으로 등록되었습니다.`);
-      } else {
-        alert(`'${trimmedName}' 선수가 소속 로스터에 성공적으로 등록되었습니다.`);
-      }
-    } catch (err: any) {
-      console.error("선수 등록 중 처리 오류:", err);
+      alert(`'${trimmedName}' 선수가 구글 데이터베이스 및 소속 로스터에 성공적으로 등록되었습니다.`);
+    } catch (error) {
+      console.error('DB 저장 실패:', error);
       // 예외 발생 시에도 로컬 로스터 등록은 보장
       try {
         const fallbackPlayer: Player = {
@@ -447,20 +520,25 @@ export function AddPlayerModal({
             },
             {
               year: 2026,
-              avg: finalAvg,
-              ops: finalOps,
-              hr: finalHr,
+              avg: isPitcher ? undefined : finalAvg,
+              ops: isPitcher ? undefined : finalOps,
+              hr: isPitcher ? undefined : finalHr,
+              era: isPitcher ? finalEra : undefined,
+              whip: isPitcher ? finalWhip : undefined,
+              wls: isPitcher ? finalWls : undefined,
               war: finalWar,
               salary: currentSalaryWon,
             },
           ],
         };
+        (fallbackPlayer as any)["에이전트"] = agent;
+        (fallbackPlayer as any)["담당 에이전트"] = agent;
         onRegister(fallbackPlayer);
         resetForm();
         onClose();
         alert(`'${trimmedName}' 선수가 소속 로스터에 등록되었습니다.`);
       } catch (innerErr: any) {
-        alert(`선수 등록 중 오류가 발생했습니다: ${err?.message || "입력값을 확인해주세요."}`);
+        alert(`선수 등록 중 오류가 발생했습니다: ${error instanceof Error ? error.message : "입력값을 확인해주세요."}`);
       }
     } finally {
       setIsSubmitting(false);
@@ -470,11 +548,18 @@ export function AddPlayerModal({
   const formatSalaryPreview = (manwon: number | "") => {
     if (manwon === "" || manwon === 0) return "0원";
     if (manwon >= 10000) {
-      const uk = manwon / 10000;
-      return `${uk.toFixed(uk % 1 === 0 ? 0 : 2)}억원 (${manwon.toLocaleString()}만원)`;
+      const uk = Math.floor(manwon / 10000);
+      const rest = manwon % 10000;
+      if (rest > 0) {
+        return `${uk}억 ${rest.toLocaleString()}만원 (${manwon.toLocaleString()}만원)`;
+      }
+      return `${uk}억원 (${manwon.toLocaleString()}만원)`;
     }
     return `${manwon.toLocaleString()}만원`;
   };
+
+  const isPitcher = position.includes("투수");
+  const showStatsCard = hasSearched || Boolean(position);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
@@ -613,99 +698,222 @@ export function AddPlayerModal({
             )}
           </div>
 
-          {/* 2. 2026 핵심 성적 지표 (타율, OPS, 홈런, WAR) 직접 편집 영역 */}
-          <div className="bg-[#181c24] p-4.5 rounded-xl border border-gold/40 shadow-lg space-y-4">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2.5 flex-wrap gap-1">
-              <span className="text-xs font-bold text-gold uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap">
-                <Sparkles className="w-4 h-4 text-gold" />
-                2026 성적 지표 (선수 검색 또는 직접 입력)
-              </span>
-              <span className="text-[11px] text-gray-400 whitespace-nowrap">
-                {avg === "" && ops === "" && hr === "" && war === "" ? "검색 전 공란 상태" : "직접 수정 가능"}
-              </span>
+          {/* 2. 2026 핵심 성적 지표 및 연봉 입력 영역 (선수 검색 완료 시 활성화) */}
+          {!showStatsCard ? (
+            <div className="bg-black/20 border border-dashed border-white/15 rounded-xl p-6 text-center space-y-2">
+              <div className="w-10 h-10 rounded-full bg-gold/10 border border-gold/20 flex items-center justify-center mx-auto text-gold">
+                <Search className="w-5 h-5" />
+              </div>
+              <p className="text-sm font-bold text-gray-300">선수 검색 후 성적 지표 및 연봉 카드가 표시됩니다</p>
+              <p className="text-xs text-gray-500 max-w-md mx-auto break-keep-all leading-relaxed">
+                상단에서 선수명을 입력하고 <span className="text-gold font-semibold">[구글 데이터베이스에서 정보 불러오기]</span>를 실행하면, 해당 선수의 포지션(타자/투수)에 맞춘 성적 지표 카드가 자동으로 표시됩니다.
+              </p>
             </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {/* 타율 */}
-              <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
-                <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
-                  타율 (AVG)
-                </label>
-                <input
-                  type="number"
-                  step="0.001"
-                  min="0"
-                  max="1"
-                  placeholder="0.000"
-                  value={avg === "" ? "" : avg}
-                  onChange={(e) => setAvg(e.target.value === "" ? "" : parseFloat(e.target.value))}
-                  className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
-                />
-                <span className="text-[10px] text-gray-500 block text-center mt-1.5 whitespace-nowrap">
-                  {typeof avg === "number" ? (avg > 0 ? (avg >= 0.3 ? "🔥 3할 타자" : "기록됨") : "0.000") : "미입력"}
+          ) : (
+            <div className="bg-[#181c24] p-4.5 rounded-xl border border-gold/40 shadow-lg space-y-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-2.5 flex-wrap gap-1">
+                <span className="text-xs font-bold text-gold uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap">
+                  <Sparkles className="w-4 h-4 text-gold" />
+                  2026 {isPitcher ? "투수" : "타자"} 성적 지표 (선수 검색 또는 직접 입력)
+                </span>
+                <span className="text-[11px] text-gray-400 whitespace-nowrap">
+                  직접 수정 가능
                 </span>
               </div>
 
-              {/* OPS */}
-              <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
-                <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
-                  OPS (출루율+장타율)
-                </label>
-                <input
-                  type="number"
-                  step="0.001"
-                  min="0"
-                  max="2"
-                  placeholder="0.000"
-                  value={ops === "" ? "" : ops}
-                  onChange={(e) => setOps(e.target.value === "" ? "" : parseFloat(e.target.value))}
-                  className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
-                />
-                <span className="text-[10px] text-gray-500 block text-center mt-1.5 whitespace-nowrap">
-                  {typeof ops === "number" ? (ops >= 0.9 ? "👑 엘리트급" : ops >= 0.8 ? "✨ 준수한 생산력" : ops > 0 ? "기록됨" : "0.000") : "미입력"}
-                </span>
-              </div>
+            {position.includes("투수") ? (
+              /* 투수 전용 성적 입력 폼: ERA, WHIP, 승/홀/세, WAR */
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {/* ERA */}
+                <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                  <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                    평균자책점 (ERA)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="99"
+                    placeholder="0.00"
+                    value={era === "" ? "" : era}
+                    onChange={(e) => setEra(e.target.value === "" ? "" : parseFloat(e.target.value))}
+                    className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                  />
+                  <span className="text-[10px] text-gray-500 block text-center mt-1.5 whitespace-nowrap">
+                    {typeof era === "number" ? (era <= 2.5 ? "🔥 특급 에이스" : era <= 3.8 ? "✨ 준수한 방어율" : "기록됨") : "미입력"}
+                  </span>
+                </div>
 
-              {/* 홈런 */}
-              <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
-                <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
-                  홈런 (개)
-                </label>
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  max="100"
-                  placeholder="0"
-                  value={hr === "" ? "" : hr}
-                  onChange={(e) => setHr(e.target.value === "" ? "" : parseInt(e.target.value, 10))}
-                  className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
-                />
-                <span className="text-[10px] text-gray-500 block text-center mt-1.5 whitespace-nowrap">
-                  {typeof hr === "number" ? `${hr}개` : "미입력"}
-                </span>
-              </div>
+                {/* WHIP */}
+                <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                  <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                    WHIP (출루허용률)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="10"
+                    placeholder="0.00"
+                    value={whip === "" ? "" : whip}
+                    onChange={(e) => setWhip(e.target.value === "" ? "" : parseFloat(e.target.value))}
+                    className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                  />
+                  <span className="text-[10px] text-gray-500 block text-center mt-1.5 whitespace-nowrap">
+                    {typeof whip === "number" ? (whip <= 1.1 ? "👑 최고 수준" : whip <= 1.3 ? "✨ 안정적" : "기록됨") : "미입력"}
+                  </span>
+                </div>
 
-              {/* WAR */}
-              <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
-                <label className="block text-[11px] font-bold text-gold mb-1.5 whitespace-nowrap">
-                  WAR (기여도)
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="-3"
-                  max="15"
-                  placeholder="0.0"
-                  value={war === "" ? "" : war}
-                  onChange={(e) => setWar(e.target.value === "" ? "" : parseFloat(e.target.value))}
-                  className="w-full h-10 bg-black/60 border border-gold/40 rounded-lg px-2 text-base font-extrabold text-gold text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
-                />
-                <span className="text-[10px] text-gold/80 block text-center mt-1.5 whitespace-nowrap">
-                  {typeof war === "number" ? (war >= 3 ? "🌟 올스타급" : war > 0 ? "기록됨" : "0.0") : "미입력"}
-                </span>
+                {/* 승/홀/세 */}
+                <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                  <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                    승/홀/세
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="예: 10승 5패 12홀"
+                    value={wls}
+                    onChange={(e) => setWls(e.target.value)}
+                    className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-sm font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                  />
+                  <span className="text-[10px] text-gray-500 block text-center mt-1.5 whitespace-nowrap">
+                    {wls ? wls : "미입력 (예: 10승 5패)"}
+                  </span>
+                </div>
+
+                {/* WAR */}
+                <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                  <label className="block text-[11px] font-bold text-gold mb-1.5 whitespace-nowrap">
+                    WAR (기여도)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="-3"
+                    max="15"
+                    placeholder="0.0"
+                    value={war === "" ? "" : war}
+                    onChange={(e) => setWar(e.target.value === "" ? "" : parseFloat(e.target.value))}
+                    className="w-full h-10 bg-black/60 border border-gold/40 rounded-lg px-2 text-base font-extrabold text-gold text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                  />
+                  <span className="text-[10px] text-gold/80 block text-center mt-1.5 whitespace-nowrap">
+                    {typeof war === "number" ? (war >= 3 ? "🌟 올스타급" : war > 0 ? "기록됨" : "0.0") : "미입력"}
+                  </span>
+                </div>
               </div>
-            </div>
+            ) : (
+              /* 타자 전용 성적 입력 폼: 타율, OPS, 홈런, WAR */
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {/* 타율 */}
+                <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                  <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                    타율 (AVG)
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0.000"
+                    value={avg}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "" || /^[0-9]*\.?[0-9]*$/.test(val)) {
+                        setAvg(val);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (avg !== "" && !isNaN(parseFloat(String(avg)))) {
+                        setAvg(parseFloat(String(avg)).toFixed(3));
+                      }
+                    }}
+                    className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                  />
+                  <span className="text-[10px] text-gray-500 block text-center mt-1.5 whitespace-nowrap">
+                    {(() => {
+                      const num = parseFloat(String(avg));
+                      if (isNaN(num) || avg === "") return "미입력";
+                      if (num >= 0.3) return "🔥 3할 타자";
+                      if (num > 0) return "기록됨";
+                      return "0.000";
+                    })()}
+                  </span>
+                </div>
+
+                {/* OPS */}
+                <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                  <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                    OPS (출루율+장타율)
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0.000"
+                    value={ops}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "" || /^[0-9]*\.?[0-9]*$/.test(val)) {
+                        setOps(val);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (ops !== "" && !isNaN(parseFloat(String(ops)))) {
+                        setOps(parseFloat(String(ops)).toFixed(3));
+                      }
+                    }}
+                    className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                  />
+                  <span className="text-[10px] text-gray-500 block text-center mt-1.5 whitespace-nowrap">
+                    {(() => {
+                      const num = parseFloat(String(ops));
+                      if (isNaN(num) || ops === "") return "미입력";
+                      if (num >= 0.9) return "👑 엘리트급";
+                      if (num >= 0.8) return "✨ 준수한 생산력";
+                      if (num > 0) return "기록됨";
+                      return "0.000";
+                    })()}
+                  </span>
+                </div>
+
+                {/* 홈런 */}
+                <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                  <label className="block text-[11px] font-bold text-gray-400 mb-1.5 whitespace-nowrap">
+                    홈런 (개)
+                  </label>
+                  <input
+                    type="number"
+                    step="1"
+                    min="0"
+                    max="100"
+                    placeholder="0"
+                    value={hr === "" ? "" : hr}
+                    onChange={(e) => setHr(e.target.value === "" ? "" : parseInt(e.target.value, 10))}
+                    className="w-full h-10 bg-black/60 border border-white/20 rounded-lg px-2 text-base font-extrabold text-white text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                  />
+                  <span className="text-[10px] text-gray-500 block text-center mt-1.5 whitespace-nowrap">
+                    {typeof hr === "number" ? `${hr}개` : "미입력"}
+                  </span>
+                </div>
+
+                {/* WAR */}
+                <div className="bg-black/50 p-3 rounded-lg border border-white/10 hover:border-gold/50 transition-colors flex flex-col justify-between">
+                  <label className="block text-[11px] font-bold text-gold mb-1.5 whitespace-nowrap">
+                    WAR (기여도)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="-3"
+                    max="15"
+                    placeholder="0.0"
+                    value={war === "" ? "" : war}
+                    onChange={(e) => setWar(e.target.value === "" ? "" : parseFloat(e.target.value))}
+                    className="w-full h-10 bg-black/60 border border-gold/40 rounded-lg px-2 text-base font-extrabold text-gold text-center focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold"
+                  />
+                  <span className="text-[10px] text-gold/80 block text-center mt-1.5 whitespace-nowrap">
+                    {typeof war === "number" ? (war >= 3 ? "🌟 올스타급" : war > 0 ? "기록됨" : "0.0") : "미입력"}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* 현재 보장 연봉 & 선수 추가 프로필 */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
@@ -770,6 +978,7 @@ export function AddPlayerModal({
               </div>
             </div>
           </div>
+          )}
 
           {/* 3. 에이전트와의 계약기간 및 담당 에이전트 설정 */}
           <div className="bg-[#12151c] p-4 rounded-xl border border-white/10 space-y-3.5">
@@ -856,7 +1065,9 @@ export function AddPlayerModal({
         {/* 모달 푸터 버튼 */}
         <div className="flex items-center justify-between p-5 border-t border-white/10 bg-white/5 flex-shrink-0 flex-wrap gap-3">
           <p className="text-xs text-gray-400 break-keep-all leading-relaxed max-w-sm">
-            선수명과 성적을 확인한 뒤 등록 버튼을 눌러주세요.
+            {!showStatsCard
+              ? "상단에서 선수를 검색하면 성적 지표 및 연봉 정보가 표시됩니다."
+              : "선수명과 성적, 연봉을 확인한 뒤 등록 버튼을 눌러주세요."}
           </p>
 
           <div className="flex items-center gap-3 ml-auto">
@@ -869,7 +1080,7 @@ export function AddPlayerModal({
             </button>
             <button
               type="button"
-              disabled={!searchName.trim() || isDbFetching || isSubmitting}
+              disabled={!searchName.trim() || isDbFetching || isSubmitting || !showStatsCard}
               onClick={handleSave}
               className="h-10 px-6 rounded-lg bg-gold hover:bg-yellow-400 text-black text-sm font-bold shadow-lg shadow-gold/20 disabled:opacity-40 transition-all cursor-pointer whitespace-nowrap flex items-center justify-center active:scale-[0.98] gap-2"
             >

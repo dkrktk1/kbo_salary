@@ -4,6 +4,9 @@ export interface PlayerStat {
   ops?: number;
   war?: number | null;
   hr?: number;
+  era?: number;
+  whip?: number;
+  wls?: string; // 승/홀/세 (예: "10승 5패 12홀", "3승 32세", "4승 2패")
   salary: number;
 }
 
