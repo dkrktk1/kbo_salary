@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { mockPlayers, mockTeams, loadStoredPlayers, saveStoredPlayers, Player, PlayerStat } from "../data";
+import { mockPlayers, mockTeams, loadStoredPlayers, saveStoredPlayers, Player, PlayerStat, getAgentBadgeStyle } from "../data";
 import {
   fetchPlayerFromDatabase,
   fetchTeamRosterFromDatabase,
@@ -34,24 +34,116 @@ import { EditPlayerModal } from "./EditPlayerModal";
 import { DeletePlayerModal } from "./DeletePlayerModal";
 
 /**
+ * 에이전트 계약기간 안전 추출 헬퍼 함수
+ * 구글 시트의 '에이전트 계약기간', '에이전트 계약기간 관리', '계약기간' 등 모든 형태의 키를 안전하게 탐색하고 공백 제거
+ */
+export function extractContractPeriod(raw: any): string {
+  if (!raw || typeof raw !== "object") return "-";
+
+  // 1. 직접 키 접근
+  const val =
+    raw["에이전트 계약기간"] ??
+    raw["에이전트 계약기간 관리"] ??
+    raw["에이전트계약기간"] ??
+    raw["계약기간"] ??
+    raw.contractPeriod;
+
+  if (val !== undefined && val !== null) {
+    const str = String(val).trim();
+    if (str !== "" && str !== "undefined" && str !== "null" && str !== "-") {
+      return str;
+    }
+  }
+
+  // 2. 키 앞뒤 공백 및 띄어쓰기 무시하고 전체 검색 (구글 시트 헤더 공백 오류 방어)
+  for (const key of Object.keys(raw)) {
+    const cleanKey = key.trim().replace(/\s+/g, "");
+    if (
+      cleanKey === "에이전트계약기간" ||
+      cleanKey === "에이전트계약기간관리" ||
+      cleanKey === "계약기간" ||
+      cleanKey.toLowerCase() === "contractperiod"
+    ) {
+      const kVal = raw[key];
+      if (kVal !== undefined && kVal !== null) {
+        const str = String(kVal).trim();
+        if (str !== "" && str !== "undefined" && str !== "null" && str !== "-") {
+          return str;
+        }
+      }
+    }
+  }
+
+  return "-";
+}
+
+/**
+ * 담당 에이전트 이름 안전 추출 헬퍼 함수
+ * '에이전트', '에이전트 ', '담당 에이전트' 등 키 공백 및 값 공백을 철저히 제거하여 '미정' 오표기 방지
+ */
+export function extractAgentName(raw: any): string {
+  if (!raw || typeof raw !== "object") return "미정";
+
+  // 1. 직접 키 접근
+  const val =
+    raw["에이전트"] ??
+    raw["담당 에이전트"] ??
+    raw["담당에이전트"] ??
+    raw.agent ??
+    raw["에이전트 "] ??
+    raw[" 에이전트"] ??
+    raw["담당자"];
+
+  if (val !== undefined && val !== null) {
+    const str = String(val).trim();
+    if (str !== "" && str !== "undefined" && str !== "null" && str !== "미정") {
+      return str;
+    }
+  }
+
+  // 2. 키 앞뒤 공백 및 띄어쓰기 무시하고 전체 검색 (구글 시트 컬럼 헤더 공백 대응: 곽빈 선수 등)
+  for (const key of Object.keys(raw)) {
+    const cleanKey = key.trim().replace(/\s+/g, "");
+    if (
+      cleanKey === "에이전트" ||
+      cleanKey === "담당에이전트" ||
+      cleanKey.toLowerCase() === "agent"
+    ) {
+      const kVal = raw[key];
+      if (kVal !== undefined && kVal !== null) {
+        const str = String(kVal).trim();
+        if (str !== "" && str !== "undefined" && str !== "null" && str !== "미정") {
+          return str;
+        }
+      }
+    }
+  }
+
+  return "미정";
+}
+
+/**
  * 원시 데이터(Raw Record)를 대시보드 Player 객체 규격으로 안전하게 변환하는 헬퍼 함수
  */
 function mapRawToPlayer(raw: any, index: number): Player | null {
   if (!raw || typeof raw !== "object") return null;
 
+  const contractPeriod = extractContractPeriod(raw);
+  const agent = extractAgentName(raw);
+
   // 이미 완성된 Player 규격을 갖춘 경우
   if (raw.id && raw.name && raw.team && Array.isArray(raw.stats) && raw.stats.length > 0) {
     return {
       id: String(raw.id),
-      name: String(raw.name),
-      team: String(raw.team),
+      name: String(raw.name).trim(),
+      team: String(raw.team).trim(),
       position: cleanPosition(raw.position || "외야수"),
       age: parsePlayerAge(raw.age),
       salaryCurrent: parsePlayerSalary(raw.salaryCurrent),
       draftYear: parseDraftYear(raw.draftYear).draftYear,
       serviceTime: parseServiceTime(raw.serviceTime),
-      contractPeriod: raw.contractPeriod || "24년 01월 01일 ~ 26년 12월 31일",
-      agent: raw["에이전트"] || raw["담당 에이전트"] || raw.agent || "미정",
+      contractPeriod,
+      agent,
       stats: raw.stats
     };
   }
@@ -65,8 +157,6 @@ function mapRawToPlayer(raw: any, index: number): Player | null {
   const salaryCurrent = parsePlayerSalary(raw.salaryCurrent ?? raw["현재 연봉"] ?? raw["현재연봉"] ?? raw["연봉"] ?? raw.salary);
   const draftInfo = parseDraftYear(raw.draftYear ?? raw["입단 연도"] ?? raw["입단연도"]);
   const serviceTime = parseServiceTime(raw.serviceTime ?? raw["등록일수"] ?? raw["총등록일수"] ?? "");
-  const contractPeriod = raw.contractPeriod || raw["에이전트 계약기간 관리"] || raw["계약기간"] || "24년 01월 01일 ~ 26년 12월 31일";
-  const agent = raw["에이전트"] || raw["담당 에이전트"] || raw.agent || "미정";
 
   // stats 추출
   let stats: PlayerStat[] = [];
@@ -103,8 +193,8 @@ function mapRawToPlayer(raw: any, index: number): Player | null {
 
   return {
     id: String(raw.id || raw.playerId || `gas_player_${index}_${Date.now()}`),
-    name,
-    team,
+    name: String(name).trim(),
+    team: String(team).trim(),
     position,
     age,
     salaryCurrent,
@@ -174,10 +264,10 @@ export default function Home() {
           .filter((p): p is Player => p !== null);
 
         if (mappedPlayers.length > 0) {
-          // 구글 시트에서 불러온 데이터와 새로 등록된 소속 선수를 병합하여 보존
+          // 구글 시트에서 불러온 데이터와 로컬 신규 등록 선수를 안전하게 병합
           const currentStored = loadStoredPlayers();
           const localOnlyPlayers = currentStored.filter(
-            (sp) => !mappedPlayers.some((mp) => mp.name === sp.name && mp.team === sp.team)
+            (sp) => !mappedPlayers.some((mp) => mp.name.trim() === sp.name.trim())
           );
           const finalPlayers = [...mappedPlayers, ...localOnlyPlayers];
           setPlayers(finalPlayers);
@@ -422,7 +512,7 @@ export default function Home() {
                 <div key={team} className="flex justify-between items-center text-xs bg-black/40 border border-white/5 rounded-lg px-2.5 py-1.5">
                   <span className="text-gray-300 font-medium">{team}</span>
                   <span className={`font-bold ${count >= 3 ? "text-amber-400" : "text-gray-400"}`}>
-                    {count}명 {count >= 3 && "(한도 도달)"}
+                    {count}명 {count >= 3 && "(한도 초과)"}
                   </span>
                 </div>
               ))}
@@ -564,10 +654,10 @@ export default function Home() {
               {displayedPlayers.map((player) => {
                 const latestStat = player.stats?.[player.stats.length - 1];
                 const war = latestStat?.war ?? 0;
-                const period = player.contractPeriod || "25년 01월 01일 ~ 27년 12월 31일";
+                const period = extractContractPeriod(player);
                 const isSyncingThis = syncingPlayerId === player.id;
-                const rowAgent = (player as any)["에이전트"] || player.agent || (player as any)["담당 에이전트"] || (player as any)["담당자"];
-                const agentName = (rowAgent && String(rowAgent).trim()) ? String(rowAgent).trim() : "미정";
+                const agentName = extractAgentName(player);
+                const agentStyle = getAgentBadgeStyle(agentName);
 
                 // 성적 표시 분기 (타자 vs 투수)
                 const avg = latestStat?.avg !== undefined ? latestStat.avg.toFixed(3) : "-";
@@ -624,18 +714,19 @@ export default function Home() {
                       {formatSalaryText(player.salaryCurrent)}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-xs font-medium text-white whitespace-nowrap">
-                        <Clock className="w-3.5 h-3.5 text-gold opacity-90 flex-shrink-0" />
-                        <span className="whitespace-nowrap text-white">{period}</span>
-                      </span>
+                      {period && period !== "-" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-xs font-medium text-white whitespace-nowrap">
+                          <Clock className="w-3.5 h-3.5 text-gold opacity-90 flex-shrink-0" />
+                          <span className="whitespace-nowrap text-white">{period}</span>
+                        </span>
+                      ) : (
+                        <span className="text-gray-500 font-medium text-xs whitespace-nowrap">-</span>
+                      )}
                     </td>
                     <td className="px-2.5 py-2.5 whitespace-nowrap">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap shadow-sm border ${
-                        agentName === "미정"
-                          ? "bg-white/5 border-white/10 text-gray-400"
-                          : "bg-gold/15 border-gold/35 text-gold"
-                      }`}>
-                        <UserCheck className="w-3 h-3 opacity-80 flex-shrink-0" />
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap shadow-sm border transition-colors ${agentStyle.badgeClass}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${agentStyle.dotClass}`} />
+                        <UserCheck className={`w-3 h-3 flex-shrink-0 ${agentStyle.iconClass}`} />
                         <span className="whitespace-nowrap">{agentName}</span>
                       </span>
                     </td>

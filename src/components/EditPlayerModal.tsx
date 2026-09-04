@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { mockTeams, Player, PlayerStat, AVAILABLE_AGENTS } from "../data";
+import { mockTeams, Player, PlayerStat, AVAILABLE_AGENTS, getAgentBadgeStyle } from "../data";
 import {
   X,
   Sparkles,
@@ -180,10 +180,11 @@ function EditPlayerModalContent({
     }
 
     const currentSalaryWon = Math.max(0, salaryManwon * 10000);
+    const currentPeriod = player.contractPeriod && player.contractPeriod !== "-" ? player.contractPeriod : "";
     const contractPeriodText =
       contractStartDate && contractEndDate
         ? `${formatDateToKorean(contractStartDate)} ~ ${formatDateToKorean(contractEndDate)}`
-        : player.contractPeriod || "25년 01월 01일 ~ 27년 12월 31일";
+        : currentPeriod;
 
     const isPitcher = position.includes("투수");
 
@@ -767,20 +768,33 @@ function EditPlayerModalContent({
 
                 {/* 원클릭 빠른 선택 칩 */}
                 <div className="flex items-center gap-1.5 mt-2">
-                  {AVAILABLE_AGENTS.map((a) => (
-                    <button
-                      key={a}
-                      type="button"
-                      onClick={() => setAgent(a)}
-                      className={`flex-1 py-1 px-1.5 rounded text-[11px] font-bold transition-all cursor-pointer border flex items-center justify-center gap-1 ${
-                        agent === a
-                          ? "bg-gold text-black border-gold shadow-sm font-extrabold"
-                          : "bg-white/5 text-gray-300 border-white/10 hover:bg-white/10 hover:text-white"
-                      }`}
-                    >
-                      <span>{a}</span>
-                    </button>
-                  ))}
+                  {AVAILABLE_AGENTS.map((a) => {
+                    const isSelected = agent === a;
+                    const isSein = a === "이세인";
+                    return (
+                      <button
+                        key={a}
+                        type="button"
+                        onClick={() => setAgent(a)}
+                        className={`flex-1 py-1 px-1.5 rounded text-[11px] font-bold transition-all cursor-pointer border flex items-center justify-center gap-1 ${
+                          isSelected
+                            ? isSein
+                              ? "bg-amber-400 text-black border-amber-400 shadow-sm shadow-amber-400/20 font-extrabold"
+                              : "bg-sky-400 text-black border-sky-400 shadow-sm shadow-sky-400/20 font-extrabold"
+                            : isSein
+                              ? "bg-white/5 text-gray-300 border-white/10 hover:bg-amber-500/10 hover:border-amber-400/40 hover:text-amber-300"
+                              : "bg-white/5 text-gray-300 border-white/10 hover:bg-sky-500/10 hover:border-sky-400/40 hover:text-sky-300"
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          isSelected
+                            ? "bg-black"
+                            : isSein ? "bg-amber-400" : "bg-sky-400"
+                        }`} />
+                        <span>{a}</span>
+                      </button>
+                    );
+                  })}
                   <button
                     type="button"
                     onClick={() => setAgent("미정")}
@@ -831,13 +845,12 @@ function EditPlayerModalContent({
               </span>
               <div className="flex items-center gap-2 flex-wrap">
                 <span
-                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border font-bold text-xs whitespace-nowrap transition-colors ${
-                    agent === "미정"
-                      ? "bg-white/5 border-white/15 text-gray-400"
-                      : "bg-gold/15 border-gold/30 text-gold"
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border font-bold text-xs whitespace-nowrap transition-colors ${
+                    getAgentBadgeStyle(agent).badgeClass
                   }`}
                 >
-                  <UserCheck className="w-3 h-3 text-current" />
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getAgentBadgeStyle(agent).dotClass}`} />
+                  <UserCheck className={`w-3 h-3 flex-shrink-0 ${getAgentBadgeStyle(agent).iconClass}`} />
                   담당: {agent}
                 </span>
                 <span className="font-mono font-bold text-white bg-white/5 border border-white/10 px-2.5 py-1 rounded text-xs whitespace-nowrap">

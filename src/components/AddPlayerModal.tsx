@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { mockTeams, Player, PlayerStat, AVAILABLE_AGENTS } from "../data";
+import { mockTeams, Player, PlayerStat, AVAILABLE_AGENTS, getAgentBadgeStyle } from "../data";
 import {
   GAS_DB_URL,
   savePlayerToDatabase,
@@ -381,7 +381,7 @@ export function AddPlayerModal({
 
     const contractPeriodText = contractStartDate && contractEndDate
       ? `${formatDateToKorean(contractStartDate)} ~ ${formatDateToKorean(contractEndDate)}`
-      : "26년 01월 01일 ~ 26년 12월 31일";
+      : "";
 
     const isPitcher = finalPosition.includes("투수");
     const finalEra = typeof era === "number" ? era : (parseFloat(String(era)) || undefined);
@@ -1004,12 +1004,57 @@ export function AddPlayerModal({
                   onChange={(e) => setAgent(e.target.value)}
                   className="w-full h-10 bg-black/50 border border-gold/40 rounded-lg px-3 text-sm text-white font-bold focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold transition-colors cursor-pointer"
                 >
+                  <option value="미정" className="bg-[#1a1d24] text-gray-400">
+                    미정 (담당자 선택)
+                  </option>
                   {AVAILABLE_AGENTS.map((a) => (
-                    <option key={a} value={a} className="bg-[#1a1d24] text-white">
+                    <option key={a} value={a} className="bg-[#1a1d24] text-white font-bold">
                       {a} 에이전트
                     </option>
                   ))}
                 </select>
+
+                {/* 원클릭 빠른 선택 칩 */}
+                <div className="flex items-center gap-1.5 mt-2">
+                  {AVAILABLE_AGENTS.map((a) => {
+                    const isSelected = agent === a;
+                    const isSein = a === "이세인";
+                    return (
+                      <button
+                        key={a}
+                        type="button"
+                        onClick={() => setAgent(a)}
+                        className={`flex-1 py-1 px-1.5 rounded text-[11px] font-bold transition-all cursor-pointer border flex items-center justify-center gap-1 ${
+                          isSelected
+                            ? isSein
+                              ? "bg-amber-400 text-black border-amber-400 shadow-sm shadow-amber-400/20 font-extrabold"
+                              : "bg-sky-400 text-black border-sky-400 shadow-sm shadow-sky-400/20 font-extrabold"
+                            : isSein
+                              ? "bg-white/5 text-gray-300 border-white/10 hover:bg-amber-500/10 hover:border-amber-400/40 hover:text-amber-300"
+                              : "bg-white/5 text-gray-300 border-white/10 hover:bg-sky-500/10 hover:border-sky-400/40 hover:text-sky-300"
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          isSelected
+                            ? "bg-black"
+                            : isSein ? "bg-amber-400" : "bg-sky-400"
+                        }`} />
+                        <span>{a}</span>
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => setAgent("미정")}
+                    className={`py-1 px-2 rounded text-[11px] font-semibold transition-all cursor-pointer border ${
+                      agent === "미정"
+                        ? "bg-rose-500/20 text-rose-300 border-rose-500/40 font-bold"
+                        : "bg-white/5 text-gray-400 border-white/10 hover:bg-white/10 hover:text-gray-200"
+                    }`}
+                  >
+                    미정
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -1048,8 +1093,13 @@ export function AddPlayerModal({
                 등록 시 표시 형태:
               </span>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gold/15 border border-gold/30 text-gold font-bold text-xs whitespace-nowrap">
-                  <UserCheck className="w-3 h-3 text-gold" />
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border font-bold text-xs whitespace-nowrap transition-colors ${
+                    getAgentBadgeStyle(agent).badgeClass
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getAgentBadgeStyle(agent).dotClass}`} />
+                  <UserCheck className={`w-3 h-3 flex-shrink-0 ${getAgentBadgeStyle(agent).iconClass}`} />
                   담당: {agent}
                 </span>
                 <span className="font-mono font-bold text-white bg-white/5 border border-white/10 px-2.5 py-1 rounded text-xs whitespace-nowrap">

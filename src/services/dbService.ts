@@ -684,6 +684,26 @@ export function convertDbToPlayer(
     }
   });
 
+  // 계약기간 및 에이전트 안전 추출 (구글 시트 '에이전트 계약기간' 및 '에이전트' 키 우선 매핑)
+  const resolvedContractPeriod =
+    latestRecord["에이전트 계약기간"] ||
+    latestRecord["에이전트 계약기간 관리"] ||
+    latestRecord["계약기간"] ||
+    fallbackBase?.contractPeriod ||
+    "-";
+
+  const rawAgentValue =
+    latestRecord["에이전트"] ||
+    latestRecord["담당 에이전트"] ||
+    latestRecord["담당에이전트"] ||
+    latestRecord.agent ||
+    fallbackBase?.agent;
+
+  const resolvedAgent =
+    rawAgentValue && String(rawAgentValue).trim() && String(rawAgentValue).trim() !== "미정"
+      ? String(rawAgentValue).trim()
+      : "미정";
+
   return {
     id: fallbackBase?.id || `db_player_${Date.now()}`,
     name,
@@ -693,8 +713,8 @@ export function convertDbToPlayer(
     salaryCurrent,
     draftYear: draftInfo.draftYear,
     serviceTime,
-    contractPeriod: fallbackBase?.contractPeriod || "25년 01월 01일 ~ 27년 12월 31일",
-    agent: fallbackBase?.agent || latestRecord["에이전트"] || latestRecord["담당 에이전트"] || "미정",
+    contractPeriod: resolvedContractPeriod,
+    agent: resolvedAgent,
     stats: stats.length > 0 ? stats : (fallbackBase?.stats || [])
   };
 }

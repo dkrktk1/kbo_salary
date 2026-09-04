@@ -27,6 +27,47 @@ export interface Player {
 export const AVAILABLE_AGENTS = ["이세인", "김승현"] as const;
 export type AgentName = typeof AVAILABLE_AGENTS[number];
 
+/**
+ * 에이전트별 차별화된 뱃지 스타일을 반환하는 함수
+ * - 이세인: 따뜻하고 품격 있는 골드/앰버 톤
+ * - 김승현: 시원하고 신뢰감 있는 스카이블루/청색 톤
+ * - 미정: 차분한 뉴트럴 그레이 톤
+ */
+export function getAgentBadgeStyle(agentName?: string): {
+  badgeClass: string;
+  iconClass: string;
+  dotClass: string;
+} {
+  const clean = (agentName || "").trim();
+  if (clean === "이세인") {
+    return {
+      badgeClass: "bg-amber-500/15 border-amber-400/40 text-amber-300 shadow-amber-500/10",
+      iconClass: "text-amber-400",
+      dotClass: "bg-amber-400",
+    };
+  }
+  if (clean === "김승현") {
+    return {
+      badgeClass: "bg-sky-500/15 border-sky-400/40 text-sky-300 shadow-sky-500/10",
+      iconClass: "text-sky-400",
+      dotClass: "bg-sky-400",
+    };
+  }
+  if (!clean || clean === "미정" || clean === "-") {
+    return {
+      badgeClass: "bg-white/5 border-white/10 text-gray-400",
+      iconClass: "text-gray-500",
+      dotClass: "bg-gray-500",
+    };
+  }
+  // 기타 예비 에이전트
+  return {
+    badgeClass: "bg-emerald-500/15 border-emerald-400/40 text-emerald-300 shadow-emerald-500/10",
+    iconClass: "text-emerald-400",
+    dotClass: "bg-emerald-400",
+  };
+}
+
 export interface Team {
   id: string;
   name: string;
