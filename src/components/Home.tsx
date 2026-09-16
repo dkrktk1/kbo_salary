@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { mockPlayers, mockTeams, loadStoredPlayers, saveStoredPlayers, Player, PlayerStat, getAgentBadgeStyle } from "../data";
+import { mockPlayers, mockTeams, loadStoredPlayers, saveStoredPlayers, Player, PlayerStat, getAgentBadgeStyle, KBO_AGENCY_DB_METADATA } from "../data";
 import {
   fetchPlayerFromDatabase,
   fetchTeamRosterFromDatabase,
@@ -9,9 +9,13 @@ import {
   parsePlayerSalary,
   parseDraftYear,
   parseServiceTime,
+  formatServiceTimeWithComma,
   extractEraFromObject,
   extractWhipFromObject,
-  extractWlsFromObject
+  extractWlsFromObject,
+  convertPlayerToAppDbPayload,
+  savePlayerToDatabase,
+  deletePlayerFromDatabase
 } from "../services/dbService";
 import {
   Users,
@@ -133,38 +137,80 @@ function mapRawToPlayer(raw: any, index: number): Player | null {
 
   // 이미 완성된 Player 규격을 갖춘 경우
   if (raw.id && raw.name && raw.team && Array.isArray(raw.stats) && raw.stats.length > 0) {
+    const cleanName = String(raw.name).trim();
+    const cleanStats = (raw.stats as PlayerStat[]).map(st => ({
+      ...st,
+      war: typeof st.war === "number" ? Number(st.war.toFixed(2)) : (st.war ? Number(parseFloat(String(st.war)).toFixed(2)) : 0)
+    }));
+    const meta = KBO_AGENCY_DB_METADATA[cleanName];
+    let dYear = parseDraftYear(raw.draftYear).draftYear;
+    if (!dYear || (dYear === 2018 && cleanName !== "곽빈")) {
+      dYear = meta?.draftYear || dYear || 0;
+    }
+    let sTime = parseServiceTime(raw.serviceTime);
+    if (!sTime || sTime === "0일" || sTime === "1년 0일" || sTime === "-") {
+      sTime = meta?.serviceTime || sTime || "-";
+    }
+
     return {
       id: String(raw.id),
-      name: String(raw.name).trim(),
+      name: cleanName,
       team: String(raw.team).trim(),
       position: cleanPosition(raw.position || "외야수"),
       age: parsePlayerAge(raw.age),
       salaryCurrent: parsePlayerSalary(raw.salaryCurrent),
-      draftYear: parseDraftYear(raw.draftYear).draftYear,
-      serviceTime: parseServiceTime(raw.serviceTime),
+      draftYear: dYear,
+      serviceTime: sTime,
       contractPeriod,
       agent,
-      stats: raw.stats
+      stats: cleanStats
     };
   }
 
   const name = raw.name || raw["선수명"] || raw["이름"] || "";
   if (!name || name === "선수" || name === "선수명") return null;
 
+  const cleanName = String(name).trim();
   const team = raw.team || raw["구단"] || raw["팀"] || raw["소속"] || raw["팀명"] || "롯데 자이언츠";
   const position = cleanPosition(raw.position || raw["포지션"] || "외야수");
   const age = parsePlayerAge(raw.age ?? raw["나이"] ?? 27);
   const salaryCurrent = parsePlayerSalary(raw.salaryCurrent ?? raw["현재 연봉"] ?? raw["현재연봉"] ?? raw["연봉"] ?? raw.salary);
   const draftInfo = parseDraftYear(raw.draftYear ?? raw["입단 연도"] ?? raw["입단연도"]);
-  const serviceTime = parseServiceTime(raw.serviceTime ?? raw["등록일수"] ?? raw["총등록일수"] ?? "");
+  const rawService = raw.serviceTime ?? raw["등록일수"] ?? raw["총등록일수"] ?? "";
+  const serviceTime = parseServiceTime(rawService);
+
+  // DB 메타데이터 및 실제 파싱값 기반 정상 매핑 (하드코딩 2018년 및 1년 0일 제거)
+  const meta = KBO_AGENCY_DB_METADATA[cleanName];
+  let finalDraftYear = draftInfo.draftYear > 0 ? draftInfo.draftYear : (meta?.draftYear || 0);
+  let finalServiceTime = (serviceTime && serviceTime !== "0일" && serviceTime !== "1년 0일" && serviceTime !== "-")
+    ? serviceTime
+    : (meta?.serviceTime || serviceTime || "-");
 
   // stats 추출
   let stats: PlayerStat[] = [];
   if (Array.isArray(raw.stats) && raw.stats.length > 0) {
-    stats = raw.stats;
+    stats = raw.stats.map((st: any) => ({
+      ...st,
+      war: typeof st.war === "number" ? Number(st.war.toFixed(2)) : (st.war ? Number(parseFloat(String(st.war)).toFixed(2)) : 0)
+    }));
   } else {
-    const rawWar = raw["핵심 스탯(WAR)"] ?? raw["WAR"] ?? raw.war ?? raw["최근 WAR"] ?? 0;
-    const war = typeof rawWar === "number" ? rawWar : (parseFloat(String(rawWar)) || null);
+    const rawWar =
+      raw["핵심 스탯(WAR)"] ??
+      raw["핵심스탯(WAR)"] ??
+      raw["최근 WAR"] ??
+      raw["최근WAR"] ??
+      raw["WAR"] ??
+      raw.WAR ??
+      raw.war ??
+      raw.War ??
+      raw["기여도"];
+    let war: number = 0;
+    if (rawWar !== undefined && rawWar !== null && rawWar !== "" && rawWar !== "-") {
+      const parsed = typeof rawWar === "number" ? rawWar : parseFloat(String(rawWar).replace(/[^0-9.-]/g, ""));
+      if (!isNaN(parsed)) {
+        war = Number(parsed.toFixed(2));
+      }
+    }
     const rawAvg = raw["타율"] ?? raw["AVG"] ?? raw.avg ?? 0;
     const avg = typeof rawAvg === "number" ? rawAvg : (parseFloat(String(rawAvg)) || undefined);
     const rawOps = raw["OPS"] ?? raw.ops ?? 0;
@@ -185,7 +231,7 @@ function mapRawToPlayer(raw: any, index: number): Player | null {
         era: era !== undefined && !isNaN(era) ? era : undefined,
         whip: whip !== undefined && !isNaN(whip) ? whip : undefined,
         wls: wls || undefined,
-        war: war !== null && !isNaN(war) ? Number(war.toFixed(2)) : null,
+        war: Number(war.toFixed(2)),
         salary: salaryCurrent
       }
     ];
@@ -193,13 +239,13 @@ function mapRawToPlayer(raw: any, index: number): Player | null {
 
   return {
     id: String(raw.id || raw.playerId || `gas_player_${index}_${Date.now()}`),
-    name: String(name).trim(),
+    name: cleanName,
     team: String(team).trim(),
     position,
     age,
     salaryCurrent,
-    draftYear: draftInfo.draftYear > 0 ? draftInfo.draftYear : 2018,
-    serviceTime: serviceTime || "1년 0일",
+    draftYear: finalDraftYear,
+    serviceTime: finalServiceTime,
     contractPeriod,
     agent,
     stats
@@ -212,10 +258,12 @@ export default function Home() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
   const [deleteTargetPlayer, setDeleteTargetPlayer] = useState<Player | null>(null);
+  const [isDeletingPlayer, setIsDeletingPlayer] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // DB 실시간 동기화 상태
   const [isBatchSyncing, setIsBatchSyncing] = useState(false);
+  const [batchSyncProgress, setBatchSyncProgress] = useState<string>("");
   const [syncingPlayerId, setSyncingPlayerId] = useState<string | null>(null);
 
   // 구글 Apps Script Web App 직접 하드코딩 엔드포인트 주소
@@ -264,17 +312,50 @@ export default function Home() {
           .filter((p): p is Player => p !== null);
 
         if (mappedPlayers.length > 0) {
-          // 구글 시트에서 불러온 데이터와 로컬 신규 등록 선수를 안전하게 병합
+          // 구글 시트 마스터 DB에서 최신 구단 로스터를 조회하여 입단 연도 및 등록일수 실시간 보강
+          const uniqueTeams = Array.from(new Set(mappedPlayers.map(p => p.team))).filter(Boolean);
+          await Promise.all(uniqueTeams.map(async (tName) => {
+            try {
+              const rosterRes = await fetchTeamRosterFromDatabase(tName);
+              if (rosterRes.success && Array.isArray(rosterRes.players) && rosterRes.players.length > 0) {
+                for (const p of mappedPlayers) {
+                  if (p.team === tName) {
+                    const match = rosterRes.players.find(rp => rp.name.trim() === p.name.trim());
+                    if (match) {
+                      if (match.draftYear) {
+                        const parsedD = parseDraftYear(match.draftYear);
+                        if (parsedD.draftYear > 0) {
+                          p.draftYear = parsedD.draftYear;
+                        }
+                      }
+                      if (match.serviceTime && match.serviceTime !== "0일" && match.serviceTime !== "1년 0일") {
+                        p.serviceTime = match.serviceTime;
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.log(`구단 [${tName}] DB 실시간 보강 안내:`, err);
+            }
+          }));
+
+          // 구글 시트에서 불러온 데이터와 로컬 신규 등록 선수를 안전하게 병합 (샘플/가상 선수는 분리 제외)
           const currentStored = loadStoredPlayers();
           const localOnlyPlayers = currentStored.filter(
-            (sp) => !mappedPlayers.some((mp) => mp.name.trim() === sp.name.trim())
+            (sp) => !mappedPlayers.some((mp) => mp.name.trim() === sp.name.trim()) &&
+                    !(sp as any).isSample &&
+                    !sp.id.startsWith("sample-") &&
+                    sp.agent !== "가상 시뮬레이터"
           );
           const finalPlayers = [...mappedPlayers, ...localOnlyPlayers];
           setPlayers(finalPlayers);
           saveStoredPlayers(finalPlayers);
         } else {
-          // 로컬 스토리지에 기존 저장된 에이전시 선수가 있다면 유지
-          const localStored = loadStoredPlayers();
+          // 로컬 스토리지에 기존 저장된 에이전시 선수가 있다면 유지 (샘플 선수 제외)
+          const localStored = loadStoredPlayers().filter(
+            (sp) => !(sp as any).isSample && !sp.id.startsWith("sample-") && sp.agent !== "가상 시뮬레이터"
+          );
           if (localStored.length > 0) {
             setPlayers(localStored);
           }
@@ -314,9 +395,10 @@ export default function Home() {
   const avgWar = players.length > 0
     ? (players.reduce((sum, p) => {
         const lastStat = p.stats?.[p.stats.length - 1];
-        return sum + (lastStat?.war || 0);
-      }, 0) / players.length).toFixed(1)
-    : "0.0";
+        const pWar = lastStat?.war || 0;
+        return sum + pWar;
+      }, 0) / players.length).toFixed(2)
+    : "0.00";
 
   // 포지션별 선수 데이터 분리 (투수 vs 타자)
   const isPitcher = (p: Player) => (p.position || "").includes("투수");
@@ -356,34 +438,102 @@ export default function Home() {
     showToast(`'${updatedPlayer.name}' 선수의 정보와 성적이 성공적으로 수정되었습니다.`);
   };
 
-  // 3. 선수 삭제
-  const handleConfirmDelete = () => {
-    if (!deleteTargetPlayer) return;
-    const updated = players.filter((p) => p.id !== deleteTargetPlayer.id);
-    setPlayers(updated);
-    saveStoredPlayers(updated);
-    showToast(`'${deleteTargetPlayer.name}' 선수가 소속 명단에서 삭제되었습니다.`);
-    setDeleteTargetPlayer(null);
+  // 3. 선수 삭제 (로컬 상태 + 구글 스프레드시트 App_data_DB 원격 삭제 연동)
+  const handleConfirmDelete = async () => {
+    if (!deleteTargetPlayer || isDeletingPlayer) return;
+    const target = deleteTargetPlayer;
+    setIsDeletingPlayer(true);
+
+    try {
+      // 1) 구글 스프레드시트 App_data_DB에서 해당 선수 영구 삭제 요청
+      const delRes = await deletePlayerFromDatabase({
+        id: target.id,
+        name: target.name,
+        team: target.team,
+      });
+
+      // 2) 로컬 상태 및 localStorage에서 제거
+      const updated = players.filter((p) => p.id !== target.id);
+      setPlayers(updated);
+      saveStoredPlayers(updated);
+
+      if (delRes.remoteDeleted || delRes.success) {
+        showToast(`'${target.name}' 선수가 App_data_DB 데이터베이스 및 소속 명단에서 완전히 삭제되었습니다.`);
+      } else {
+        showToast(`'${target.name}' 선수가 소속 명단에서 삭제되었습니다.`);
+      }
+    } catch (err: any) {
+      console.error("DB 선수 삭제 오류:", err);
+      // 오류 발생 시에도 로컬 상태는 삭제 반영
+      const updated = players.filter((p) => p.id !== target.id);
+      setPlayers(updated);
+      saveStoredPlayers(updated);
+      showToast(`'${target.name}' 선수가 소속 명단에서 삭제되었습니다.`);
+    } finally {
+      setIsDeletingPlayer(false);
+      setDeleteTargetPlayer(null);
+    }
   };
 
-  // 4. 개별 선수 실시간 DB 동기화
+  // 4. 개별 선수 실시간 DB 동기화 및 App_data_DB 자동 덮어쓰기 저장
   const handleSyncSinglePlayer = async (player: Player) => {
     setSyncingPlayerId(player.id);
     try {
-      const dbResult = await fetchPlayerFromDatabase(player.name, player.team);
-      if (dbResult.success && dbResult.records.length > 0) {
-        const converted = convertDbToPlayer(dbResult, player);
-        if (converted) {
-          const updated = players.map((p) => (p.id === player.id ? converted : p));
-          setPlayers(updated);
-          saveStoredPlayers(updated);
-          showToast(`'${player.name}' 선수의 최신 DB 성적 및 연봉 정보가 동기화되었습니다.`);
-        } else {
-          showToast(`'${player.name}' 선수의 데이터 변환에 실패했습니다.`);
+      // 1) App_data_DB (에이전시 DB)에서 최신 등록 정보 조회
+      let appDataPlayer: Player | null = null;
+      try {
+        const timestamp = new Date().getTime();
+        const appDataUrl = `${GAS_DB_URL}?sheetName=App_data_DB&type=agency&t=${timestamp}`;
+        const appRes = await fetch(appDataUrl);
+        if (appRes.ok) {
+          const appJson = await appRes.json();
+          const list: any[] = Array.isArray(appJson) ? appJson : (appJson?.data || appJson?.players || appJson?.records || []);
+          const rawMatch = list.find((item: any) => {
+            const iName = String(item["선수명"] || item.name || item.이름 || "").trim();
+            return iName === player.name.trim();
+          });
+          if (rawMatch) {
+            appDataPlayer = mapRawToPlayer(rawMatch, 0);
+          }
         }
-      } else {
-        showToast(`구글 DB에서 '${player.name}' 선수의 기록을 찾지 못했습니다.`);
+      } catch (err) {
+        console.warn("App_data_DB fetch error during single sync:", err);
       }
+
+      // 2) Stat_Master_DB 및 구단 로스터에서 연도별 상세 기록 조회
+      const dbResult = await fetchPlayerFromDatabase(player.name, player.team);
+      const baseToUse = appDataPlayer || player;
+
+      let finalPlayerToSave: Player | null = null;
+
+      if (dbResult.success && dbResult.records.length > 0) {
+        const converted = convertDbToPlayer(dbResult, baseToUse);
+        if (converted) {
+          finalPlayerToSave = { ...converted, id: player.id };
+        }
+      } else if (appDataPlayer) {
+        finalPlayerToSave = { ...player, ...appDataPlayer, id: player.id };
+      }
+
+      if (finalPlayerToSave) {
+        // 프론트엔드 상태 및 로컬 스토리지 즉시 반영
+        const updated = players.map((p) => (p.id === player.id ? finalPlayerToSave! : p));
+        setPlayers(updated);
+        saveStoredPlayers(updated);
+
+        // 구글 시트 App_data_DB에 변경된 최신 정보 자동 덮어쓰기 저장 (백엔드 프록시 연동, action: 'update')
+        const dbPayload = convertPlayerToAppDbPayload(finalPlayerToSave, "update");
+        const saveResult = await savePlayerToDatabase(dbPayload);
+
+        if (saveResult.success) {
+          showToast(`'${player.name}' 선수의 최신 성적 및 연봉 정보가 App_data_DB에 자동 덮어쓰기 저장되었습니다.`);
+        } else {
+          showToast(`'${player.name}' 선수의 정보가 로컬에 갱신되었습니다.`);
+        }
+        return;
+      }
+
+      showToast(`구글 DB에서 '${player.name}' 선수의 기록을 찾지 못했습니다.`);
     } catch (e: any) {
       showToast(`동기화 오류: ${e.message}`);
     } finally {
@@ -391,46 +541,114 @@ export default function Home() {
     }
   };
 
-  // 5. 전체 선수 일괄 DB 동기화
+  // 5. 전체 선수 일괄 DB 동기화 및 App_data_DB 자동 덮어쓰기 저장
   const handleSyncAllPlayers = async () => {
     if (players.length === 0) return;
     setIsBatchSyncing(true);
+    setBatchSyncProgress("최신 DB 기록 조회 중...");
     let updatedCount = 0;
+    let savedDbCount = 0;
 
     try {
+      // 1) App_data_DB (에이전시 소속 선수 DB) 최신 데이터 일괄 fetch
+      const appDataMap = new Map<string, Player>();
+      try {
+        const timestamp = new Date().getTime();
+        const appDataUrl = `${GAS_DB_URL}?sheetName=App_data_DB&type=agency&t=${timestamp}`;
+        const appRes = await fetch(appDataUrl);
+        if (appRes.ok) {
+          const appJson = await appRes.json();
+          const list: any[] = Array.isArray(appJson) ? appJson : (appJson?.data || appJson?.players || appJson?.records || []);
+          list.forEach((item, idx) => {
+            const iName = String(item["선수명"] || item.name || item.이름 || "").trim();
+            if (iName) {
+              const mapped = mapRawToPlayer(item, idx);
+              if (mapped) appDataMap.set(iName, mapped);
+            }
+          });
+        }
+      } catch (err) {
+        console.warn("App_data_DB batch sync warning:", err);
+      }
+
+      // 2) 전체 소속 선수에 대해 최신 KBO 통계 기록 조회 및 로컬 리스트 갱신
       const updatedList = [...players];
       for (let i = 0; i < updatedList.length; i++) {
         const p = updatedList[i];
+        const pName = p.name.trim();
+        setBatchSyncProgress(`기록 조회 중... (${i + 1}/${updatedList.length} ${pName})`);
+        const appPlayer = appDataMap.get(pName);
+        const basePlayer = appPlayer ? { ...p, ...appPlayer, id: p.id } : p;
+
+        // Stat_Master_DB / 구단 로스터에서 연도별 기록 동기화
         const res = await fetchPlayerFromDatabase(p.name, p.team);
         if (res.success && res.records.length > 0) {
-          const conv = convertDbToPlayer(res, p);
+          const conv = convertDbToPlayer(res, basePlayer);
           if (conv) {
-            updatedList[i] = conv;
+            updatedList[i] = { ...conv, id: p.id };
             updatedCount++;
+            continue;
           }
         }
+
+        // Stat_Master_DB 조회가 없더라도 App_data_DB에 갱신된 정보가 있으면 반영
+        if (appPlayer) {
+          updatedList[i] = basePlayer;
+          updatedCount++;
+        }
       }
+
+      // 로컬 상태 및 localStorage 즉시 업데이트
       setPlayers(updatedList);
       saveStoredPlayers(updatedList);
-      showToast(`전체 ${players.length}명 중 ${updatedCount}명의 선수가 구글 DB와 실시간 동기화되었습니다.`);
+
+      // 3) 갱신된 모든 선수 정보를 구글 시트 App_data_DB에 순차적으로 자동 덮어쓰기 저장
+      for (let i = 0; i < updatedList.length; i++) {
+        const p = updatedList[i];
+        setBatchSyncProgress(`App_data_DB 저장 중... (${i + 1}/${updatedList.length} ${p.name})`);
+        
+        try {
+          const payload = convertPlayerToAppDbPayload(p, "update");
+          const saveRes = await savePlayerToDatabase(payload);
+          if (saveRes.success) {
+            savedDbCount++;
+          }
+        } catch (saveErr) {
+          console.warn(`[handleSyncAllPlayers] '${p.name}' DB 저장 경고:`, saveErr);
+        }
+
+        // Google Apps Script 동시성 충돌 방지를 위한 안전 딜레이 (200ms)
+        if (i < updatedList.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+
+      showToast(`전체 ${players.length}명 중 ${updatedCount}명의 최신 기록이 화면에 반영되고, ${savedDbCount}명이 App_data_DB에 성공적으로 자동 덮어쓰기 저장되었습니다.`);
     } catch (e: any) {
       showToast(`일괄 동기화 중 오류가 발생했습니다: ${e.message}`);
     } finally {
       setIsBatchSyncing(false);
+      setBatchSyncProgress("");
     }
   };
 
   const formatSalaryText = (salary: number) => {
     if (!salary || isNaN(salary) || salary <= 0) return "0만";
-    const won = salary < 100000 ? salary * 10000 : salary;
+    let won = salary;
+    while (won > 50000000000) {
+      won = Math.round(won / 10000);
+    }
+    if (won < 5000000) {
+      won = won * 10000;
+    }
 
     if (won >= 100000000) {
       const uk = Math.floor(won / 100000000);
       const man = Math.round((won % 100000000) / 10000);
       if (man > 0) {
-        return `${uk}억 ${man.toLocaleString()}만`;
+        return `${uk.toLocaleString()}억 ${man.toLocaleString()}만`;
       }
-      return `${uk}억`;
+      return `${uk.toLocaleString()}억`;
     }
     const man = Math.round(won / 10000);
     return `${man.toLocaleString()}만`;
@@ -473,7 +691,7 @@ export default function Home() {
             title="DB에서 모든 선수 기록 실시간 갱신"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isBatchSyncing ? "animate-spin text-gold" : "text-gray-400"}`} />
-            <span>{isBatchSyncing ? "DB 동기화 중..." : "전체 DB 동기화"}</span>
+            <span>{isBatchSyncing ? (batchSyncProgress || "DB 동기화 중...") : "전체 DB 동기화"}</span>
           </button>
 
           <button
@@ -540,7 +758,7 @@ export default function Home() {
       </div>
 
       {/* 소속 선수 기록/정보 테이블 (타자/투수 탭 분리 관리) */}
-      <div className="bg-[#131722] border border-white/10 rounded-2xl p-5 md:p-6 shadow-xl flex flex-col gap-4">
+      <div className="bg-[#131722] border border-white/10 rounded-2xl p-4 md:p-5 shadow-xl flex flex-col gap-3.5">
         <div className="flex items-center justify-between pb-3 border-b border-white/10 flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <div className="w-7 h-7 rounded-lg bg-gold/15 border border-gold/30 flex items-center justify-center text-gold">
@@ -595,63 +813,64 @@ export default function Home() {
 
         <div className="overflow-x-auto rounded-xl border border-white/10 bg-black/30">
           <table className="w-full text-xs text-left whitespace-nowrap">
-            <thead className="text-[13px] text-center text-gray-400 uppercase tracking-wider bg-black/50 border-b border-white/10 font-bold whitespace-nowrap">
+            <thead className="text-xs text-center text-gray-400 uppercase tracking-wider bg-black/50 border-b border-white/10 font-bold whitespace-nowrap">
               {activeTab === "batter" ? (
-                /* 타자 테이블 헤더: 선수명, 구단, 포지션, 나이, 타율, OPS, 홈런, 최근 WAR, 현재 연봉, 계약기간, 에이전트, 관리 */
+                /* 타자 테이블 헤더: 선수명, 구단, 포지션, 나이, 타율, OPS, 홈런, WAR, 현재 연봉, 계약기간, 에이전트, 관리 */
                 <tr>
-                  <th className="px-3 py-3 font-bold text-center text-white whitespace-nowrap text-[13px]">선수명</th>
-                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">구단</th>
-                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">포지션</th>
-                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">나이</th>
-                  <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">타율</th>
-                  <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">OPS</th>
-                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">홈런</th>
-                  <th className="px-2.5 py-3 font-bold text-gold whitespace-nowrap text-[13px]">최근 WAR</th>
-                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">현재 연봉</th>
-                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">
+                  <th className="px-2 py-2.5 font-bold text-center text-white whitespace-nowrap text-xs">선수명</th>
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">구단</th>
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">포지션</th>
+                  <th className="px-1 py-2.5 font-bold text-white whitespace-nowrap text-xs">나이</th>
+                  <th className="px-1.5 py-2.5 font-bold text-gray-200 whitespace-nowrap text-xs">타율</th>
+                  <th className="px-1.5 py-2.5 font-bold text-gray-200 whitespace-nowrap text-xs">OPS</th>
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">홈런</th>
+                  <th className="px-1.5 py-2.5 font-bold text-gold whitespace-nowrap text-xs">WAR</th>
+                  <th className="px-2 py-2.5 font-bold text-white whitespace-nowrap text-xs">현재 연봉</th>
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">
                     <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                       <Calendar className="w-3 h-3 text-gold" />
-                      <span className="text-white text-[13px]">계약기간</span>
+                      <span className="text-white text-xs">계약기간</span>
                     </div>
                   </th>
-                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">
                     <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                       <UserCheck className="w-3 h-3 text-gold" />
-                      <span className="text-white text-[13px]">에이전트</span>
+                      <span className="text-white text-xs">에이전트</span>
                     </div>
                   </th>
-                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">관리</th>
+                  <th className="px-2 py-2.5 font-bold text-white whitespace-nowrap text-xs">관리</th>
                 </tr>
               ) : (
-                /* 투수 테이블 헤더: 선수명, 구단, 포지션, 나이, ERA, WHIP, 승/홀/세, 최근 WAR, 현재 연봉, 계약기간, 에이전트, 관리 */
+                /* 투수 테이블 헤더: 선수명, 구단, 포지션, 나이, ERA, WHIP, 승/홀/세, WAR, 현재 연봉, 계약기간, 에이전트, 관리 */
                 <tr>
-                  <th className="px-3 py-3 font-bold text-center text-white whitespace-nowrap text-[13px]">선수명</th>
-                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">구단</th>
-                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">포지션</th>
-                  <th className="px-2 py-3 font-bold text-white whitespace-nowrap text-[13px]">나이</th>
-                  <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">ERA</th>
-                  <th className="px-2.5 py-3 font-bold text-gray-200 whitespace-nowrap text-[13px]">WHIP</th>
-                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">승/홀/세</th>
-                  <th className="px-2.5 py-3 font-bold text-gold whitespace-nowrap text-[13px]">최근 WAR</th>
-                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">현재 연봉</th>
-                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">
+                  <th className="px-2 py-2.5 font-bold text-center text-white whitespace-nowrap text-xs">선수명</th>
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">구단</th>
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">포지션</th>
+                  <th className="px-1 py-2.5 font-bold text-white whitespace-nowrap text-xs">나이</th>
+                  <th className="px-1.5 py-2.5 font-bold text-gray-200 whitespace-nowrap text-xs">ERA</th>
+                  <th className="px-1.5 py-2.5 font-bold text-gray-200 whitespace-nowrap text-xs">WHIP</th>
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">승/홀/세</th>
+                  <th className="px-1.5 py-2.5 font-bold text-gold whitespace-nowrap text-xs">WAR</th>
+                  <th className="px-2 py-2.5 font-bold text-white whitespace-nowrap text-xs">현재 연봉</th>
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">
                     <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                       <Calendar className="w-3 h-3 text-gold" />
-                      <span className="text-white text-[13px]">계약기간</span>
+                      <span className="text-white text-xs">계약기간</span>
                     </div>
                   </th>
-                  <th className="px-2.5 py-3 font-bold text-white whitespace-nowrap text-[13px]">
+                  <th className="px-1.5 py-2.5 font-bold text-white whitespace-nowrap text-xs">
                     <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                       <UserCheck className="w-3 h-3 text-gold" />
-                      <span className="text-white text-[13px]">에이전트</span>
+                      <span className="text-white text-xs">에이전트</span>
                     </div>
                   </th>
-                  <th className="px-3 py-3 font-bold text-white whitespace-nowrap text-[13px]">관리</th>
+                  <th className="px-2 py-2.5 font-bold text-white whitespace-nowrap text-xs">관리</th>
                 </tr>
               )}
             </thead>
             <tbody className="divide-y divide-white/5 whitespace-nowrap">
               {displayedPlayers.map((player) => {
+                const pName = (player.name || "").trim();
                 const latestStat = player.stats?.[player.stats.length - 1];
                 const war = latestStat?.war ?? 0;
                 const period = extractContractPeriod(player);
@@ -673,88 +892,90 @@ export default function Home() {
                     key={player.id}
                     className="hover:bg-white/5 transition-colors text-center text-xs font-sans group"
                   >
-                    <td className="px-3 py-2.5 font-semibold text-white text-left pl-5 whitespace-nowrap">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-7 h-7 rounded-lg bg-gold/15 border border-gold/30 text-gold text-xs font-black flex items-center justify-center shadow-sm flex-shrink-0">
-                          {player.name.charAt(0)}
-                        </div>
-                        <div className="whitespace-nowrap text-left">
-                          <span className="font-bold text-white text-sm block leading-snug text-left">{player.name}</span>
-                          <span className="text-xs text-white font-medium whitespace-nowrap text-left block">입단 {player.draftYear}년</span>
-                        </div>
+                    <td className="px-2.5 py-2 font-semibold text-white text-left whitespace-nowrap">
+                      <div className="whitespace-nowrap text-left">
+                        <span className="font-bold text-white text-[13px] block leading-snug text-left">{player.name}</span>
+                        <span className="text-[11px] text-gray-400 font-normal whitespace-nowrap text-left block">
+                          {player.draftYear > 0 ? `입단 ${player.draftYear}년` : "입단연도 미상"}
+                        </span>
+                        <span className="text-[10px] text-gray-300 font-medium whitespace-nowrap text-left block">
+                          {player.serviceTime && player.serviceTime !== "-" && player.serviceTime !== "0일"
+                            ? formatServiceTimeWithComma(player.serviceTime)
+                            : "기록 없음"}
+                        </span>
                       </div>
                     </td>
-                    <td className="px-2 py-2.5 whitespace-nowrap">
-                      <span className="px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-white text-xs font-semibold whitespace-nowrap inline-block">
+                    <td className="px-1.5 py-2 whitespace-nowrap">
+                      <span className="px-1.5 py-0.5 rounded-md bg-black/40 border border-white/10 text-white text-[11px] font-semibold whitespace-nowrap inline-block">
                         {player.team}
                       </span>
                     </td>
-                    <td className="px-2.5 py-2.5 text-white font-semibold text-xs whitespace-nowrap">{player.position}</td>
-                    <td className="px-2.5 py-2.5 text-white font-medium text-xs whitespace-nowrap">{player.age || 24}세</td>
+                    <td className="px-1.5 py-2 text-white font-semibold text-xs whitespace-nowrap">{player.position}</td>
+                    <td className="px-1 py-2 text-white font-medium text-xs whitespace-nowrap">{player.age || 24}세</td>
 
                     {/* 포지션별 전용 스탯 3열 */}
                     {activeTab === "batter" ? (
                       <>
-                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{avg}</td>
-                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{ops}</td>
-                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{hr}</td>
+                        <td className="px-1.5 py-2 text-white font-bold text-xs tracking-wide whitespace-nowrap">{avg}</td>
+                        <td className="px-1.5 py-2 text-white font-bold text-xs tracking-wide whitespace-nowrap">{ops}</td>
+                        <td className="px-1.5 py-2 text-white font-bold text-xs tracking-wide whitespace-nowrap">{hr}</td>
                       </>
                     ) : (
                       <>
-                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{era}</td>
-                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{whip}</td>
-                        <td className="px-2.5 py-2.5 text-white font-bold text-xs tracking-wide whitespace-nowrap">{wls}</td>
+                        <td className="px-1.5 py-2 text-white font-bold text-xs tracking-wide whitespace-nowrap">{era}</td>
+                        <td className="px-1.5 py-2 text-white font-bold text-xs tracking-wide whitespace-nowrap">{whip}</td>
+                        <td className="px-1.5 py-2 text-white font-bold text-xs tracking-wide whitespace-nowrap">{wls}</td>
                       </>
                     )}
 
-                    <td className="px-2.5 py-2.5 text-gold font-bold text-sm whitespace-nowrap">
-                      {war.toFixed(1)}
+                    <td className="px-1.5 py-2 text-gold font-bold text-xs whitespace-nowrap">
+                      {typeof war === "number" ? war.toFixed(2) : "0.00"}
                     </td>
-                    <td className="px-3 py-2.5 text-emerald-400 font-bold text-xs whitespace-nowrap">
+                    <td className="px-2 py-2 text-emerald-400 font-bold text-xs whitespace-nowrap">
                       {formatSalaryText(player.salaryCurrent)}
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap">
+                    <td className="px-1.5 py-2 whitespace-nowrap">
                       {period && period !== "-" ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 text-xs font-medium text-white whitespace-nowrap">
-                          <Clock className="w-3.5 h-3.5 text-gold opacity-90 flex-shrink-0" />
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/40 border border-white/10 text-[11px] font-medium text-white whitespace-nowrap">
+                          <Clock className="w-3 h-3 text-gold opacity-90 flex-shrink-0" />
                           <span className="whitespace-nowrap text-white">{period}</span>
                         </span>
                       ) : (
                         <span className="text-gray-500 font-medium text-xs whitespace-nowrap">-</span>
                       )}
                     </td>
-                    <td className="px-2.5 py-2.5 whitespace-nowrap">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold whitespace-nowrap shadow-sm border transition-colors ${agentStyle.badgeClass}`}>
+                    <td className="px-1.5 py-2 whitespace-nowrap">
+                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-bold whitespace-nowrap shadow-sm border transition-colors ${agentStyle.badgeClass}`}>
                         <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${agentStyle.dotClass}`} />
-                        <UserCheck className={`w-3 h-3 flex-shrink-0 ${agentStyle.iconClass}`} />
+                        <UserCheck className={`w-2.5 h-2.5 flex-shrink-0 ${agentStyle.iconClass}`} />
                         <span className="whitespace-nowrap">{agentName}</span>
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap">
-                      <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">
+                    <td className="px-2 py-2 whitespace-nowrap">
+                      <div className="flex items-center justify-center gap-1 whitespace-nowrap">
                         <button
                           onClick={() => setEditingPlayer(player)}
-                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                          className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
                           title="선수 정보 및 성적 수정"
                         >
-                          <Pencil className="w-3 h-3 text-gold flex-shrink-0" />
+                          <Pencil className="w-2.5 h-2.5 text-gold flex-shrink-0" />
                           <span className="whitespace-nowrap">수정</span>
                         </button>
                         <button
                           onClick={() => handleSyncSinglePlayer(player)}
                           disabled={isSyncingThis}
-                          className="px-2 py-1 rounded-lg bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50 whitespace-nowrap"
-                          title="구글 스프레드시트 DB에서 최신 기록 동기화"
+                          className="px-1.5 py-0.5 rounded-md bg-white/5 hover:bg-gold/20 hover:text-gold border border-white/10 text-gray-300 text-[11px] font-semibold transition-all flex items-center gap-0.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                          title="최신 DB 기록 조회 및 App_data_DB 자동 덮어쓰기 저장"
                         >
-                          <RefreshCw className={`w-3 h-3 flex-shrink-0 ${isSyncingThis ? "animate-spin text-gold" : ""}`} />
+                          <RefreshCw className={`w-2.5 h-2.5 flex-shrink-0 ${isSyncingThis ? "animate-spin text-gold" : ""}`} />
                           <span className="whitespace-nowrap">{isSyncingThis ? "..." : "DB"}</span>
                         </button>
                         <button
                           onClick={() => setDeleteTargetPlayer(player)}
-                          className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all cursor-pointer whitespace-nowrap"
+                          className="p-1 rounded-md text-gray-500 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all cursor-pointer whitespace-nowrap"
                           title="선수 삭제"
                         >
-                          <Trash2 className="w-3.5 h-3.5 flex-shrink-0" />
+                          <Trash2 className="w-3 h-3 flex-shrink-0" />
                         </button>
                       </div>
                     </td>
@@ -801,6 +1022,7 @@ export default function Home() {
       <DeletePlayerModal
         player={deleteTargetPlayer}
         isOpen={!!deleteTargetPlayer}
+        isDeleting={isDeletingPlayer}
         onClose={() => setDeleteTargetPlayer(null)}
         onConfirm={handleConfirmDelete}
       />

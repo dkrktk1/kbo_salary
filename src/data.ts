@@ -8,6 +8,11 @@ export interface PlayerStat {
   whip?: number;
   wls?: string; // 승/홀/세 (예: "10승 5패 12홀", "3승 32세", "4승 2패")
   salary: number;
+  csRate?: number;
+  pb9?: number;
+  rf9?: number;
+  iso?: number;
+  [key: string]: any;
 }
 
 export interface Player {
@@ -180,13 +185,90 @@ export const mockPlayers: Player[] = [];
 
 export const PLAYERS_STORAGE_KEY = "kbo_agency_players";
 
+/**
+ * KBO 마스터 데이터베이스(Stat_Master_DB/구글 스프레드시트) 기준 등록 선수 메타데이터
+ * - 하드코딩 2018년 또는 '1년 0일' 임의값 방지 및 DB 기준 정상 복원용
+ */
+export const KBO_AGENCY_DB_METADATA: Record<string, { draftYear: number; serviceTime: string }> = {
+  "손성빈": { draftYear: 2021, serviceTime: "3년 133일 (568일)" }, // DB: '21롯데', 568일
+  "나승엽": { draftYear: 2021, serviceTime: "3년 87일 (522일)" },   // DB: '21롯데', 522일
+  "곽빈":   { draftYear: 2018, serviceTime: "7년 13일 (1,028일)" },  // DB: '18두산', 1028일
+  "노시환": { draftYear: 2019, serviceTime: "9년 90일 (1,395일)" },  // DB: '19한화', 1395일
+  "김도영": { draftYear: 2022, serviceTime: "5년 11일 (736일)" },   // DB: '22KIA', 736일
+  "이이무라": { draftYear: 2026, serviceTime: "69일" },             // DB: '26롯데', 69일
+  "박찬호": { draftYear: 2014, serviceTime: "11년 103일 (1,698일)" },// DB: '14KIA', 1698일
+  "황성빈": { draftYear: 2022, serviceTime: "5년 71일 (796일)" },   // DB: '22롯데', 796일
+  "정보근": { draftYear: 2019, serviceTime: "6년 10일 (880일)" },   // DB: '19롯데', 880일
+  "윤동희": { draftYear: 2022, serviceTime: "4년 73일 (653일)" },   // DB: '22롯데', 653일
+  "양의지": { draftYear: 2006, serviceTime: "20년 132일 (3,032일)" },// DB: '06두산', 3032일
+  "손아섭": { draftYear: 2007, serviceTime: "22년 21일 (3,211일)" }, // DB: '07롯데', 3211일
+};
+
+/**
+ * 선수 연봉 원(KRW) 단위 및 DB 메타데이터(입단연도, 등록일수, WAR) 정규화 헬퍼 함수
+ * - 500억원 초과 비정상적인 값(과거 중복 10,000 곱셈 오류) 복원
+ * - 500만 미만 값(만원 단위 입력: 예: 6000)은 원 단위(60,000,000)로 보정
+ * - 2018년 일괄 적용 오류 복구: DB 기준 실제 입단연도 및 등록일수 적용
+ */
+export function sanitizePlayerSalary(player: Player): Player {
+  if (!player || typeof player !== "object") return player;
+  let sal = player.salaryCurrent || 0;
+  while (sal > 50000000000) {
+    sal = Math.round(sal / 10000);
+  }
+  if (sal > 0 && sal < 5000000) {
+    sal = sal * 10000;
+  }
+  const cleanName = String(player.name || "").trim();
+  const cleanStats = (player.stats || []).map(st => {
+    let s = st.salary || 0;
+    while (s > 50000000000) {
+      s = Math.round(s / 10000);
+    }
+    if (s > 0 && s < 5000000) {
+      s = s * 10000;
+    }
+    let warVal = typeof st.war === "number" ? Number(st.war.toFixed(2)) : (st.war ? Number(parseFloat(String(st.war)).toFixed(2)) : 0);
+    return { ...st, salary: s, war: warVal };
+  });
+
+  // DB 기준 입단연도 및 등록일수 복원 (기존 2018 일괄 적용 및 1년 0일 오류 치유)
+  let draftYear = player.draftYear;
+  let serviceTime = player.serviceTime;
+  if (KBO_AGENCY_DB_METADATA[cleanName]) {
+    const meta = KBO_AGENCY_DB_METADATA[cleanName];
+    if (!draftYear || (draftYear === 2018 && cleanName !== "곽빈")) {
+      draftYear = meta.draftYear;
+    }
+    if (!serviceTime || serviceTime === "1년 0일" || serviceTime === "0일" || serviceTime === "-") {
+      serviceTime = meta.serviceTime;
+    }
+  }
+
+  // 괄호 속 일수가 1,000 이상이면 콤마 추가 (예: (1028일) -> (1,028일))
+  if (serviceTime) {
+    serviceTime = serviceTime.replace(/\(([\d,]+)\s*일\)/g, (_, digits) => {
+      const num = parseInt(digits.replace(/,/g, ""), 10);
+      return isNaN(num) ? `(${digits}일)` : `(${num.toLocaleString()}일)`;
+    });
+  }
+
+  return {
+    ...player,
+    draftYear: draftYear || player.draftYear,
+    serviceTime: serviceTime || player.serviceTime,
+    salaryCurrent: sal,
+    stats: cleanStats
+  };
+}
+
 export function loadStoredPlayers(): Player[] {
   try {
     const saved = localStorage.getItem(PLAYERS_STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed)) {
-        return parsed;
+        return parsed.map(sanitizePlayerSalary);
       }
     }
   } catch (e) {
@@ -197,7 +279,8 @@ export function loadStoredPlayers(): Player[] {
 
 export function saveStoredPlayers(players: Player[]): void {
   try {
-    localStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(players));
+    const sanitized = players.map(sanitizePlayerSalary);
+    localStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(sanitized));
     window.dispatchEvent(new Event("kbo_players_updated"));
   } catch (e) {
     console.error("Failed to save players to storage:", e);

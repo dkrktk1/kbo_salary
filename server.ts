@@ -54,10 +54,32 @@ app.post("/api/gemini/reality-check", async (req, res) => {
 
 app.post("/api/gemini/simulator", async (req, res) => {
   try {
-    const { playerData, targetStats } = req.body;
+    const { playerData, targetStats, practicalTargetRange, faMarketRange, isNonFA, serviceTimeInfo } = req.body;
     const aiClient = getAI();
     
-    const prompt = `다음 선수의 현재 데이터와 다음 시즌 목표 스탯을 바탕으로 예상 연봉 범위를 계산하고, 구단 프런트와 협상할 핵심 논리를 도출해 주세요. 현재 연봉이 과대/과소 평가되었는지도 분석해 주세요.\n\n현재 선수 데이터:\n${JSON.stringify(playerData, null, 2)}\n\n다음 시즌 목표 스탯:\n${JSON.stringify(targetStats, null, 2)}`;
+    const prompt = `당신은 KBO 리그 최고 권위의 에이전트 협상 수석 전략가입니다.
+선수의 데이터와 목표 성적을 바탕으로 구단과의 연봉 협상 테이블에서 사용할 '핵심 협상 논리 브리핑'을 3~4개의 명확한 불릿 포인트로 작성해 주세요.
+
+[핵심 협상 투트랙(Two-Track) 전략 원칙]
+1. 등록일수 기반 FA / 비FA 지위 및 앵커링(Anchoring) 논리:
+   ${isNonFA 
+     ? `- "해당 선수의 데이터 기반 실제 시장 가치는 ${faMarketRange?.max || "고액"} 수준이나, 현재 1군 등록일수(${serviceTimeInfo?.display || "요건 미달"})가 KBO 규약상 FA 자격 취득 요건(정규 7~8시즌)에 미달하는 점과 구단 고과 산정 시스템을 존중하여, 전략적으로 ${practicalTargetRange?.min || ""} ~ ${practicalTargetRange?.max || ""}을 현실적 협상 목표액으로 제시한다"는 식의 앵커링 논리를 반드시 포함할 것.`
+     : `- "해당 선수는 1군 등록일수 기준 FA 자격을 이미 충족하였으므로, 데이터 기반 시장 가치 ${faMarketRange?.min || ""} ~ ${faMarketRange?.max || ""}을 직접적인 협상 타겟으로 삼아 합당한 대우를 요구한다."`}
+2. 구단 프런트 설득 논리:
+   - 순수 세이버메트릭스 시장 가치 대비 대폭 할인된 합리적 금액임을 강조하여 구단의 심리적 저항을 낮추고, 목표 성적 달성 시 인상의 당위성을 완벽히 입증할 것.
+3. 포지션 프리미엄 및 특화 지표(포수 수비·블로킹, 투수 이닝·ERA·WHIP, 타자 wRC+·RF9 등)를 직접 인용할 것.
+
+[중요 금액 표기 지침]
+- 금액을 명시할 때는 반드시 '5억', '5억 5,000만원', '2억 3,000만원', '6,000만원'과 같이 억 단위와 콤마가 포함된 만원 단위 한글 형식으로 일관되게 표기해 주세요.
+${practicalTargetRange ? `- [현실적 협상 목표액(비FA 구단 고과 타겟)]: ${practicalTargetRange.min} ~ ${practicalTargetRange.max}` : ""}
+${faMarketRange ? `- [데이터 기반 FA 환산 가치]: ${faMarketRange.min} ~ ${faMarketRange.max}` : ""}
+${serviceTimeInfo ? `- [1군 등록일수 현황]: ${serviceTimeInfo.display} (${serviceTimeInfo.statusLabel || (isNonFA ? "비FA 선수" : "FA 자격 충족")})` : ""}
+
+현재 선수 데이터:
+${JSON.stringify(playerData, null, 2)}
+
+다음 시즌 목표 스탯:
+${JSON.stringify(targetStats, null, 2)}`;
     
     const response = await aiClient.models.generateContent({
       model: "gemini-3.5-flash",
@@ -265,30 +287,64 @@ ${csvData}`);
   }
 });
 
+const recentSaveRequests = new Map<string, number>();
+
 app.post("/api/db/save-player", async (req, res) => {
   try {
     const payload = req.body;
     const GAS_DB_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
     
+    const playerId = payload.id || payload.ID || payload.name || payload["선수명"];
+    const now = Date.now();
+    
+    // 동일 선수에 대해 3초 내 중복 요청이 들어올 경우 GAS에 2중 기록되지 않도록 차단
+    if (playerId && recentSaveRequests.has(playerId)) {
+      const prevTime = recentSaveRequests.get(playerId)!;
+      if (now - prevTime < 3000) {
+        console.log(`[서버 중복 방지] 선수(${playerId}) 3초 내 중복 저장 요청 감지 -> 단일 저장 유지`);
+        return res.json({ success: true, remoteSaved: true, deduplicated: true });
+      }
+    }
+    if (playerId) {
+      recentSaveRequests.set(playerId, now);
+      if (recentSaveRequests.size > 100) {
+        for (const [key, timestamp] of recentSaveRequests.entries()) {
+          if (now - timestamp > 60000) recentSaveRequests.delete(key);
+        }
+      }
+    }
+
+    const isSample = payload.isSample === true || payload.type === "sample_player" || payload.sheetName === "Sample_Player_DB";
+    const targetSheet = isSample ? "Sample_Player_DB" : (payload.sheetName || payload.targetSheet || "App_data_DB");
+    const targetType = isSample ? "sample_player" : (payload.type || "agency");
+    const targetAction = payload.action || (isSample ? "save_sample" : "update");
+    const playerName = payload["선수명"] || payload.name || "";
+    const requestUrl = `${GAS_DB_URL}?sheetName=${encodeURIComponent(targetSheet)}&targetSheet=${encodeURIComponent(targetSheet)}&type=${encodeURIComponent(targetType)}&action=${encodeURIComponent(targetAction)}&name=${encodeURIComponent(playerName)}&선수명=${encodeURIComponent(playerName)}&t=${Date.now()}`;
+
     // Attempt sending to Google Apps Script from backend (Node.js avoids browser CORS errors)
     let remoteSaved = false;
     let details: string | undefined;
 
     try {
-      const response = await fetch(GAS_DB_URL, {
+      const response = await fetch(requestUrl, {
         method: "POST",
         headers: {
           "Content-Type": "text/plain;charset=utf-8",
         },
         body: JSON.stringify(payload),
+        redirect: "manual",
       });
 
-      const text = await response.text();
-      // Check if GAS returned an error page (e.g. doPost not found)
-      if (text.includes("doPost") || text.includes("エラー") || text.includes("Error") || !response.ok) {
-        details = "Google Apps Script does not have doPost implemented";
-      } else {
+      // Google Apps Script redirects with 302 on successful doPost execution
+      if (response.status === 302 || response.status === 200 || response.ok) {
         remoteSaved = true;
+      } else {
+        const text = await response.text();
+        if (text.includes("doPost") || text.includes("エラー") || text.includes("Error")) {
+          details = "Google Apps Script error";
+        } else {
+          remoteSaved = true;
+        }
       }
     } catch (e: any) {
       details = e.message;
@@ -302,6 +358,57 @@ app.post("/api/db/save-player", async (req, res) => {
     });
   } catch (error: any) {
     console.error("Save Player API Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Internal server error" });
+  }
+});
+
+app.post("/api/db/delete-player", async (req, res) => {
+  try {
+    const payload = req.body;
+    const GAS_DB_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+    
+    const playerName = payload["선수명"] || payload.name || payload.id || "";
+    const targetSheet = payload.sheetName || payload.targetSheet || "App_data_DB";
+    const targetType = payload.type || "agency";
+    const targetAction = payload.action || "delete";
+    
+    const requestUrl = `${GAS_DB_URL}?sheetName=${encodeURIComponent(targetSheet)}&targetSheet=${encodeURIComponent(targetSheet)}&type=${encodeURIComponent(targetType)}&action=${encodeURIComponent(targetAction)}&mode=delete&name=${encodeURIComponent(playerName)}&선수명=${encodeURIComponent(playerName)}&id=${encodeURIComponent(payload.id || "")}&t=${Date.now()}`;
+
+    let remoteDeleted = false;
+    let details: string | undefined;
+
+    try {
+      const response = await fetch(requestUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain;charset=utf-8",
+        },
+        body: JSON.stringify(payload),
+        redirect: "manual",
+      });
+
+      if (response.status === 302 || response.status === 200 || response.ok) {
+        remoteDeleted = true;
+      } else {
+        const text = await response.text();
+        if (text.includes("doPost") || text.includes("エラー") || text.includes("Error")) {
+          details = "Google Apps Script error";
+        } else {
+          remoteDeleted = true;
+        }
+      }
+    } catch (e: any) {
+      details = e.message;
+    }
+
+    res.json({
+      success: true,
+      remoteDeleted,
+      details,
+      payload
+    });
+  } catch (error: any) {
+    console.error("Delete Player API Error:", error);
     res.status(500).json({ success: false, error: error.message || "Internal server error" });
   }
 });

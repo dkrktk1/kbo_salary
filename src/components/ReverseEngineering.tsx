@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, BarChart, Bar, Cell, ComposedChart, Line } from 'recharts';
 import { mockTeams, loadStoredPlayers, saveStoredPlayers, Team, Player } from '../data';
-import { fetchTeamRosterFromDatabase, DbTeamPlayer, cleanPosition, parsePlayerSalary } from '../services/dbService';
+import { fetchTeamRosterFromDatabase, DbTeamPlayer, cleanPosition, parsePlayerSalaryToManwon, parseServiceTimeFaStatus } from '../services/dbService';
 import { Loader2, TrendingUp, AlertTriangle, Calculator, Sparkles, Database, RefreshCw, AlertCircle, ArrowUpDown, ArrowUp, ArrowDown, Filter, Search, X } from 'lucide-react';
 
 interface StatWeight {
@@ -30,17 +30,40 @@ interface AnalysisResult {
   }[];
 }
 
-const formatCurrency = (value: number) => {
-  const roundedValue = Math.round(value / 10000) * 10000;
-  if (roundedValue >= 100000000) {
-    const uk = Math.floor(roundedValue / 100000000);
-    const man = Math.floor((roundedValue % 100000000) / 10000);
-    if (man > 0) {
-      return `${uk}억 ${man.toLocaleString()}만`;
-    }
-    return `${uk}억`;
+/**
+ * 연봉 포맷터 함수
+ * - 들어오는 값을 '만원' 단위 순수 숫자(예: 9500 -> 9,500만 / 105000 -> 10억 5,000만)로 가정
+ * - 억, 만 단위로 깔끔하게 분리하여 반환
+ */
+export const formatCurrency = (valueManwon: number | string | undefined | null): string => {
+  if (valueManwon === undefined || valueManwon === null || valueManwon === "") return "0만";
+  let num = typeof valueManwon === "number" ? valueManwon : parseFloat(String(valueManwon).replace(/,/g, "").replace(/[^0-9.-]/g, ""));
+  if (isNaN(num) || num === 0) return "0만";
+
+  // 혹시라도 500억원 초과의 비정상적인 숫자가 유입될 경우 복원
+  while (Math.abs(num) > 50000000000) {
+    num = num / 10000;
   }
-  return `${(roundedValue / 10000).toLocaleString()}만`;
+  // 5,000,000 이상(원 단위)의 숫자가 유입될 경우 만원 단위로 복원 (예: 60,000,000원 -> 6,000만원)
+  while (Math.abs(num) >= 5000000) {
+    num = num / 10000;
+  }
+
+  const isNegative = num < 0;
+  const absVal = Math.round(Math.abs(num));
+  const sign = isNegative ? "-" : "";
+
+  // 1억원 = 10,000만원
+  if (absVal >= 10000) {
+    const uk = Math.floor(absVal / 10000);
+    const man = absVal % 10000;
+    if (man > 0) {
+      return `${sign}${uk.toLocaleString()}억 ${man.toLocaleString()}만`;
+    }
+    return `${sign}${uk.toLocaleString()}억`;
+  }
+
+  return `${sign}${absVal.toLocaleString()}만`;
 };
 
 const SESSION_STORAGE_KEY = 'teamTendencyData';
@@ -53,14 +76,14 @@ const getStoredTendencyData = (): Record<string, DbTeamPlayer[]> | null => {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
       const data: Record<string, DbTeamPlayer[]> = (parsed.rosters && typeof parsed.rosters === 'object') ? parsed.rosters : parsed;
-      // 각 선수 객체의 salary가 만원 단위(1억 미만 숫자, 예: 220000 -> 22억원)로 저장된 경우 parsePlayerSalary를 통해 보정
+      // DB에서 가져온 순수 숫자(만원 단위, 예: 9500) 형태 그대로 캐시 보존 (곱하기 연산 없음)
       const normalized: Record<string, DbTeamPlayer[]> = {};
       Object.entries(data).forEach(([teamName, list]) => {
         if (Array.isArray(list)) {
           normalized[teamName] = list
             .map((p) => ({
               ...p,
-              salary: parsePlayerSalary(p.salary)
+              salary: parsePlayerSalaryToManwon(p.salary)
             }))
             .filter((p) => typeof p.salary === 'number' && p.salary > 0);
         }
@@ -204,15 +227,15 @@ export default function ReverseEngineering() {
           return true;
         }
 
-        // 5. 현재 연봉 필터
+        // 5. 현재 연봉 필터 (만원 단위 기준: 10억 = 100,000, 1억 = 10,000, 5000만 = 5,000)
         if (filterCategory === 'salary') {
           if (!filterQuery || filterQuery === 'ALL') return true;
-          const salaryWon = typeof p.salary === 'number' ? p.salary : parseInt(String(p.salary)) || 0;
-          if (filterQuery === 'salary_10uk_plus') return salaryWon >= 1000000000;
-          if (filterQuery === 'salary_5uk_to_10uk') return salaryWon >= 500000000 && salaryWon < 1000000000;
-          if (filterQuery === 'salary_1uk_to_5uk') return salaryWon >= 100000000 && salaryWon < 500000000;
-          if (filterQuery === 'salary_5000_to_1uk') return salaryWon >= 50000000 && salaryWon < 100000000;
-          if (filterQuery === 'salary_under_5000') return salaryWon < 50000000;
+          const salaryManwon = parsePlayerSalaryToManwon(p.salary);
+          if (filterQuery === 'salary_10uk_plus') return salaryManwon >= 100000;
+          if (filterQuery === 'salary_5uk_to_10uk') return salaryManwon >= 50000 && salaryManwon < 100000;
+          if (filterQuery === 'salary_1uk_to_5uk') return salaryManwon >= 10000 && salaryManwon < 50000;
+          if (filterQuery === 'salary_5000_to_1uk') return salaryManwon >= 5000 && salaryManwon < 10000;
+          if (filterQuery === 'salary_under_5000') return salaryManwon < 5000;
           return true;
         }
 
@@ -264,12 +287,8 @@ export default function ReverseEngineering() {
           valA = typeof a.draftYear === 'number' ? a.draftYear : parseInt(String(a.draftYear)) || 0;
           valB = typeof b.draftYear === 'number' ? b.draftYear : parseInt(String(b.draftYear)) || 0;
         } else if (sortField === 'serviceTime') {
-          const matchA = String(a.serviceTime).match(/(\d+)\s*일/);
-          const daysA = matchA ? parseInt(matchA[1], 10) : parseInt(String(a.serviceTime).replace(/[^0-9]/g, '')) || 0;
-          const matchB = String(b.serviceTime).match(/(\d+)\s*일/);
-          const daysB = matchB ? parseInt(matchB[1], 10) : parseInt(String(b.serviceTime).replace(/[^0-9]/g, '')) || 0;
-          valA = daysA;
-          valB = daysB;
+          valA = parseServiceTimeFaStatus(a.serviceTime).totalDays;
+          valB = parseServiceTimeFaStatus(b.serviceTime).totalDays;
         } else if (sortField === 'age') {
           valA = typeof a.age === 'number' ? a.age : parseInt(String(a.age)) || 0;
           valB = typeof b.age === 'number' ? b.age : parseInt(String(b.age)) || 0;
@@ -339,7 +358,9 @@ export default function ReverseEngineering() {
       try {
         const payrolls: Record<string, number> = {};
         mockTeams.forEach((t) => {
-          if (t.currentPayroll) payrolls[t.name] = t.currentPayroll;
+          if (t.currentPayroll) {
+            payrolls[t.name] = t.currentPayroll >= 100000000 ? Math.round(t.currentPayroll / 10000) : t.currentPayroll;
+          }
         });
         setTeamPayrollMap((prev) => ({ ...payrolls, ...prev }));
 
@@ -377,11 +398,11 @@ export default function ReverseEngineering() {
                   payrolls[team.name] = total;
                   preloaded[team.name] = res.players;
                 } else if (team.currentPayroll) {
-                  payrolls[team.name] = team.currentPayroll;
+                  payrolls[team.name] = team.currentPayroll >= 100000000 ? Math.round(team.currentPayroll / 10000) : team.currentPayroll;
                 }
               } catch {
                 if (team.currentPayroll) {
-                  payrolls[team.name] = team.currentPayroll;
+                  payrolls[team.name] = team.currentPayroll >= 100000000 ? Math.round(team.currentPayroll / 10000) : team.currentPayroll;
                 }
               }
             })
@@ -421,7 +442,9 @@ export default function ReverseEngineering() {
     try {
       const payrolls: Record<string, number> = {};
       mockTeams.forEach((t) => {
-        if (t.currentPayroll) payrolls[t.name] = t.currentPayroll;
+        if (t.currentPayroll) {
+          payrolls[t.name] = t.currentPayroll >= 100000000 ? Math.round(t.currentPayroll / 10000) : t.currentPayroll;
+        }
       });
 
       const preloaded: Record<string, DbTeamPlayer[]> = {};
@@ -437,11 +460,11 @@ export default function ReverseEngineering() {
                 payrolls[team.name] = total;
                 preloaded[team.name] = res.players;
               } else if (team.currentPayroll) {
-                payrolls[team.name] = team.currentPayroll;
+                payrolls[team.name] = team.currentPayroll >= 100000000 ? Math.round(team.currentPayroll / 10000) : team.currentPayroll;
               }
             } catch {
               if (team.currentPayroll) {
-                payrolls[team.name] = team.currentPayroll;
+                payrolls[team.name] = team.currentPayroll >= 100000000 ? Math.round(team.currentPayroll / 10000) : team.currentPayroll;
               }
             }
           })
@@ -549,7 +572,7 @@ export default function ReverseEngineering() {
             age: p.age,
             position: p.position,
             war: p.stats[p.stats.length - 1]?.war ?? 0,
-            salary: p.salaryCurrent,
+            salary: parsePlayerSalaryToManwon(p.salaryCurrent),
             draftYear: p.draftYear,
             serviceTime: p.serviceTime || "3년 0일",
             team: p.team
@@ -649,7 +672,7 @@ export default function ReverseEngineering() {
             age: updatedPlayer.age,
             position: updatedPlayer.position,
             war: updatedPlayer.stats[updatedPlayer.stats.length - 1]?.war ?? p.war,
-            salary: updatedPlayer.salaryCurrent,
+            salary: parsePlayerSalaryToManwon(updatedPlayer.salaryCurrent),
             draftYear: updatedPlayer.draftYear,
             serviceTime: updatedPlayer.serviceTime
           };
@@ -743,14 +766,14 @@ export default function ReverseEngineering() {
     : players.filter(p => p.team === selectedTeam.name).map(p => ({
         name: p.name,
         war: p.stats[p.stats.length - 1]?.war ?? 0,
-        salary: p.salaryCurrent
+        salary: parsePlayerSalaryToManwon(p.salaryCurrent)
       }))
     )
     .filter(p => typeof p.salary === 'number' && p.salary > 0)
     .map(p => ({
       name: p.name,
       war: p.war,
-      salary: p.salary
+      salary: parsePlayerSalaryToManwon(p.salary)
     }));
 
   const handleScatterClick = (data: any) => {
@@ -774,7 +797,8 @@ export default function ReverseEngineering() {
         } else if (teamPayrollMap[team.name] !== undefined) {
           totalPayroll = teamPayrollMap[team.name];
         } else {
-          totalPayroll = team.currentPayroll || 0;
+          const cp = team.currentPayroll || 0;
+          totalPayroll = cp >= 100000000 ? Math.round(cp / 10000) : cp;
         }
         return { ...team, calculatedPayroll: totalPayroll };
       })
@@ -1381,7 +1405,8 @@ export default function ReverseEngineering() {
                     />
                     <Scatter name="선수" data={scatterData} fill="#8884d8" onClick={handleScatterClick} style={{ cursor: 'pointer' }}>
                       {scatterData.map((entry, index) => {
-                        const expected = entry.war * selectedTeam.costPerWar;
+                        const costPerWarManwon = selectedTeam.costPerWar >= 10000000 ? Math.round(selectedTeam.costPerWar / 10000) : selectedTeam.costPerWar;
+                        const expected = entry.war * costPerWarManwon;
                         const color = entry.salary > expected * 1.2 ? '#f87171' : entry.salary < expected * 0.8 ? '#60a5fa' : '#9ca3af';
                         return <Cell key={`cell-${index}`} fill={color} />;
                       })}
@@ -1418,11 +1443,14 @@ export default function ReverseEngineering() {
                     <div className="absolute top-0 right-0 w-32 h-32 bg-gold/5 rounded-full blur-2xl pointer-events-none" />
                     <div className="text-xs font-bold text-gold mb-1">{selectedTeam.name} 기준 가치 환산</div>
                     <div className="text-3xl font-black text-white tracking-tight font-mono">
-                      {formatCurrency(selectedPlayerForSim.stats[selectedPlayerForSim.stats.length - 1].war * selectedTeam.costPerWar)}
+                      {formatCurrency(
+                        (selectedPlayerForSim.stats[selectedPlayerForSim.stats.length - 1]?.war ?? 0) *
+                        (selectedTeam.costPerWar >= 10000000 ? Math.round(selectedTeam.costPerWar / 10000) : selectedTeam.costPerWar)
+                      )}
                       <span className="text-xs text-gray-400 font-normal ml-2">예상 연봉</span>
                     </div>
                     <div className="text-xs text-gray-400 mt-2 font-mono">
-                      현재 연봉: {formatCurrency(selectedPlayerForSim.salaryCurrent)}
+                      현재 연봉: {formatCurrency(parsePlayerSalaryToManwon(selectedPlayerForSim.salaryCurrent))}
                     </div>
                   </div>
                 )}

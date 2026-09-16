@@ -62,6 +62,7 @@ export interface DbFetchResult {
   playerName: string;
   teamName?: string;
   records: DbRawPlayerRecord[];
+  summaryRecord?: DbRawPlayerRecord | null;
   stat2024?: DbRawPlayerRecord | null;
   stat2025?: DbRawPlayerRecord | null;
   stat2026?: DbRawPlayerRecord | null;
@@ -258,7 +259,20 @@ export function extractOpsFromObject(obj: any): number | undefined {
  */
 export function extractWarFromObject(obj: any): number {
   if (!obj || typeof obj !== "object") return 0;
-  const val = obj.WAR ?? obj.war ?? obj.War ?? obj["핵심 스탯(WAR)"] ?? obj["WAR"] ?? obj["기여도"];
+  const val =
+    obj["핵심 스탯(WAR)"] ??
+    obj["핵심스탯(WAR)"] ??
+    obj["최근 WAR"] ??
+    obj["최근WAR"] ??
+    obj.WAR ??
+    obj.war ??
+    obj.War ??
+    obj["WAR"] ??
+    obj["WAR(승리기여도)"] ??
+    obj["기여도"] ??
+    obj["승리기여도"] ??
+    obj["핵심 스탯"] ??
+    obj["핵심스탯"];
   return parsePlayerWar(val);
 }
 
@@ -390,8 +404,23 @@ function extractRecordsFromResponse(j: any, trimmedName: string, targetTeam?: st
     }
 
     // 2. 객체 자체에 연도 또는 스탯 정보가 포함된 경우 레코드로 추가
+    const warVal = extractWarFromObject(item);
     const hasYear = item.연도 !== undefined || item.시즌 !== undefined || item.year !== undefined || item.Year !== undefined;
-    const hasStat = item["CS%"] !== undefined || item["도루저지율"] !== undefined || item.OPS !== undefined || item.WAR !== undefined || item.타율 !== undefined;
+    const hasStat =
+      item["CS%"] !== undefined ||
+      item["도루저지율"] !== undefined ||
+      item.OPS !== undefined ||
+      item.WAR !== undefined ||
+      item.war !== undefined ||
+      item.War !== undefined ||
+      item.타율 !== undefined ||
+      item["핵심 스탯(WAR)"] !== undefined ||
+      item["핵심스탯(WAR)"] !== undefined ||
+      item["최근 WAR"] !== undefined ||
+      item["최근WAR"] !== undefined ||
+      item["현재 연봉"] !== undefined ||
+      item["현재연봉"] !== undefined ||
+      warVal !== 0;
 
     if (hasYear || hasStat) {
       records.push({
@@ -401,7 +430,9 @@ function extractRecordsFromResponse(j: any, trimmedName: string, targetTeam?: st
         포지션: resolvedPosition,
         "CS%": (item["CS%"] !== undefined && item["CS%"] !== null && item["CS%"] !== "") ? item["CS%"] : extractCsFromObject(item),
         OPS: (item["OPS"] !== undefined && item["OPS"] !== null && item["OPS"] !== "") ? item["OPS"] : extractOpsFromObject(item),
-        WAR: (item["WAR"] !== undefined && item["WAR"] !== null && item["WAR"] !== "") ? item["WAR"] : extractWarFromObject(item),
+        WAR: (item["WAR"] !== undefined && item["WAR"] !== null && item["WAR"] !== "") ? item["WAR"] : (warVal !== 0 ? warVal : extractWarFromObject(item)),
+        "핵심 스탯(WAR)": item["핵심 스탯(WAR)"] ?? item["핵심스탯(WAR)"] ?? (warVal !== 0 ? warVal : undefined),
+        "최근 WAR": item["최근 WAR"] ?? item["최근WAR"] ?? (warVal !== 0 ? warVal : undefined),
       });
     }
   };
@@ -595,12 +626,17 @@ export async function fetchPlayerFromDatabase(playerName: string, teamName?: str
 
     const firstRec = finalRecords[0];
     const resolvedTeam = firstRec.팀 || firstRec.구단 || firstRec.소속 || firstRec.team || foundTeamName || "롯데 자이언츠";
+    const summaryRec = finalRecords.find((r) => {
+      const y = r.연도 || r.시즌 || r.year;
+      return !y && (extractWarFromObject(r) !== 0 || r["핵심 스탯(WAR)"] !== undefined || r["최근 WAR"] !== undefined || r["현재 연봉"] !== undefined);
+    }) || finalRecords[0];
 
     return {
       success: true,
       playerName: trimmedName,
       teamName: resolvedTeam,
       records: finalRecords,
+      summaryRecord: summaryRec,
       stat2024: d2024,
       stat2025: d2025,
       stat2026: d2026
@@ -627,19 +663,24 @@ export function convertDbToPlayer(
   }
 
   const latestRecord = dbResult.stat2026 || dbResult.stat2025 || dbResult.stat2024 || dbResult.records[0];
+  const summaryRec = dbResult.summaryRecord || dbResult.records.find((r) => extractWarFromObject(r) !== 0 || r["핵심 스탯(WAR)"] !== undefined || r["최근 WAR"] !== undefined) || latestRecord;
 
   const name = latestRecord.선수명 || latestRecord.이름 || latestRecord.name || dbResult.playerName || fallbackBase?.name || "선수";
   const team = latestRecord.팀 || latestRecord.구단 || latestRecord.소속 || dbResult.teamName || fallbackBase?.team || "롯데 자이언츠";
   const position = cleanPosition(latestRecord.포지션 || fallbackBase?.position || "내야수");
-  const age = parsePlayerAge(latestRecord.나이 ?? latestRecord.age ?? fallbackBase?.age);
-  const draftInfo = parseDraftYear(latestRecord["입단 연도"] ?? latestRecord["입단연도"] ?? latestRecord.입단연도 ?? fallbackBase?.draftYear);
-  const serviceTime = parseServiceTime(latestRecord["등록일수"] !== undefined ? latestRecord["등록일수"] : (latestRecord.등록일수 ?? fallbackBase?.serviceTime));
-  const salaryCurrent = parsePlayerSalary(latestRecord["현재 연봉"] !== undefined ? latestRecord["현재 연봉"] : (latestRecord["현재연봉"] ?? latestRecord.연봉 ?? fallbackBase?.salaryCurrent));
+  const age = parsePlayerAge(latestRecord.나이 ?? latestRecord.age ?? summaryRec?.나이 ?? fallbackBase?.age);
+  const draftInfo = parseDraftYear(latestRecord["입단 연도"] ?? latestRecord["입단연도"] ?? latestRecord.입단연도 ?? summaryRec?.["입단 연도"] ?? fallbackBase?.draftYear);
+  const serviceTime = parseServiceTime(latestRecord["등록일수"] !== undefined ? latestRecord["등록일수"] : (latestRecord.등록일수 ?? summaryRec?.["등록일수"] ?? fallbackBase?.serviceTime));
+  const salaryCurrent = parsePlayerSalary(latestRecord["현재 연봉"] !== undefined ? latestRecord["현재 연봉"] : (latestRecord["현재연봉"] ?? latestRecord.연봉 ?? summaryRec?.["현재 연봉"] ?? fallbackBase?.salaryCurrent));
   
   const latestAvg = parsePlayerAvg(latestRecord.타율 ?? latestRecord.AVG ?? latestRecord.avg ?? latestRecord.Avg) ?? 0;
   const latestOps = parsePlayerOps(latestRecord.OPS ?? latestRecord.ops ?? latestRecord.Ops) ?? 0;
   const latestHr = parsePlayerHr(latestRecord.홈런 ?? latestRecord.HR ?? latestRecord.hr ?? latestRecord.Hr) ?? 0;
-  const latestWar = parsePlayerWar(latestRecord["핵심 스탯(WAR)"] !== undefined ? latestRecord["핵심 스탯(WAR)"] : (latestRecord.WAR !== undefined ? latestRecord.WAR : latestRecord.war));
+  
+  // 마스터 프로필 객체, 2026 레코드, latestRecord, fallbackBase 순서로 유효한 최신 WAR 추출
+  const dbWar = extractWarFromObject(summaryRec) || extractWarFromObject(dbResult.stat2026) || extractWarFromObject(latestRecord);
+  const fallbackWar = fallbackBase?.stats?.[fallbackBase.stats.length - 1]?.war ?? 0;
+  const effectiveLatestWar = dbWar !== 0 ? dbWar : fallbackWar;
 
   // 3개년 스탯 조립 (해당 연도 값이 없으면 0 반환)
   const stats: PlayerStat[] = [];
@@ -650,7 +691,8 @@ export function convertDbToPlayer(
       const yAvg = parsePlayerAvg(raw.타율 ?? raw.AVG ?? raw.avg ?? raw.Avg) ?? 0;
       const yOps = parsePlayerOps(raw.OPS ?? raw.ops ?? raw.Ops) ?? 0;
       const yHr = parsePlayerHr(raw.홈런 ?? raw.HR ?? raw.hr ?? raw.Hr) ?? 0;
-      const yWar = parsePlayerWar(raw["핵심 스탯(WAR)"] !== undefined ? raw["핵심 스탯(WAR)"] : (raw.WAR !== undefined ? raw.WAR : raw.war));
+      const parsedYWar = parsePlayerWar(raw["핵심 스탯(WAR)"] !== undefined ? raw["핵심 스탯(WAR)"] : (raw["최근 WAR"] ?? raw.WAR ?? raw.war));
+      const yWar = (year === 2026 && effectiveLatestWar !== 0) ? effectiveLatestWar : parsedYWar;
       const ySalary = parsePlayerSalary(raw["현재 연봉"] ?? raw["현재연봉"] ?? raw.연봉 ?? raw.salary);
       const yEra = extractEraFromObject(raw);
       const yWhip = extractWhipFromObject(raw);
@@ -670,19 +712,31 @@ export function convertDbToPlayer(
     } else {
       const existing = fallbackBase?.stats?.find((s) => s.year === year);
       if (existing) {
-        stats.push(existing);
+        stats.push({
+          ...existing,
+          war: (year === 2026 && effectiveLatestWar !== 0) ? effectiveLatestWar : existing.war
+        });
       } else {
         stats.push({
           year,
-          avg: 0,
-          ops: 0,
-          war: 0,
-          hr: 0,
-          salary: 0
+          avg: year === 2026 ? latestAvg : 0,
+          ops: year === 2026 ? latestOps : 0,
+          war: year === 2026 ? effectiveLatestWar : 0,
+          hr: year === 2026 ? latestHr : 0,
+          era: year === 2026 ? extractEraFromObject(latestRecord) : undefined,
+          whip: year === 2026 ? extractWhipFromObject(latestRecord) : undefined,
+          wls: year === 2026 ? extractWlsFromObject(latestRecord) : undefined,
+          salary: year === 2026 ? salaryCurrent : 0
         });
       }
     }
   });
+
+  // 최신 연도(2026) 스탯에 effectiveLatestWar 안전하게 보장
+  const s2026 = stats.find((s) => s.year === 2026) || stats[stats.length - 1];
+  if (s2026 && effectiveLatestWar !== 0) {
+    s2026.war = effectiveLatestWar;
+  }
 
   // 계약기간 및 에이전트 안전 추출 (구글 시트 '에이전트 계약기간' 및 '에이전트' 키 우선 매핑)
   const resolvedContractPeriod =
@@ -763,17 +817,48 @@ export function parsePlayerAge(rawAge: any): number {
 
 /**
  * 연봉 필드 파서 (해당되는 값이 없으면 0 반환)
- * 데이터베이스에는 연봉이 만원 단위 숫자(예: 9500 -> 9,500만원, 40000 -> 4억원, 100000 -> 10억원, 220000 -> 22억원)로 저장되어 있습니다.
+ * - 데이터베이스에는 연봉이 만원 단위 숫자(예: 6000 -> 6,000만원, 9500 -> 9,500만원, 40000 -> 4억원, 100000 -> 10억원, 220000 -> 22억원)로 저장되어 있습니다.
+ * - 500만 미만의 숫자는 만원 단위로 판단하여 10,000을 곱해 원(KRW) 단위로 변환합니다.
+ * - 500만 이상의 숫자는 이미 원(KRW) 단위로 계산된 값이므로 그대로 보존합니다.
+ * - 500억원 초과의 기형적 숫자는 중복 10,000 곱셈 오류를 복원합니다.
  */
 export function parsePlayerSalary(rawSalary: any): number {
   if (rawSalary === undefined || rawSalary === null || rawSalary === "") return 0;
-  const num = typeof rawSalary === "number" ? rawSalary : parseFloat(String(rawSalary).replace(/[^0-9.-]/g, ""));
+  let num = typeof rawSalary === "number" ? rawSalary : parseFloat(String(rawSalary).replace(/,/g, "").replace(/[^0-9.-]/g, ""));
   if (isNaN(num) || num <= 0) return 0;
-  // 1억 미만의 숫자는 만원 단위(예: 3000 -> 3천만원, 9500 -> 9,500만원, 40000 -> 4억원, 100000 -> 10억원, 220000 -> 22억원, 300000 -> 30억원)로 판단하여 10,000을 곱함
-  if (num < 100000000) {
+
+  // 500억원 초과 비정상적인 값(과거 중복 곱하기 오류) 복원
+  while (num > 50000000000) {
+    num = Math.round(num / 10000);
+  }
+
+  // 500만 미만의 숫자는 만원 단위(예: 3000 -> 3천만원, 6000 -> 6천만원, 9500 -> 9,500만원, 40000 -> 4억원, 100000 -> 10억원)로 판단하여 10,000을 곱함
+  if (num < 5000000) {
     return num * 10000;
   }
   return num;
+}
+
+/**
+ * DB 원본 연봉 파서 (순수 숫자 만원 단위 보존)
+ * - 임의로 * 10000 곱하기 연산을 하거나 문자열을 붙이지 않고, DB 원본 숫자(예: 6000, 9500, 105000) 그대로 반환
+ * - 500만 원 이상(원 단위)의 숫자가 들어온 경우 10,000으로 나누어 만원 단위로 복원 (예: 60,000,000 -> 6,000)
+ */
+export function parsePlayerSalaryToManwon(rawSalary: any): number {
+  if (rawSalary === undefined || rawSalary === null || rawSalary === "") return 0;
+  let num = typeof rawSalary === "number" ? rawSalary : parseFloat(String(rawSalary).replace(/,/g, "").replace(/[^0-9.-]/g, ""));
+  if (isNaN(num) || num <= 0) return 0;
+
+  // 500억원 초과 비정상적인 값 복원
+  while (num > 50000000000) {
+    num = Math.round(num / 10000);
+  }
+
+  // 5,000,000(500만) 이상의 숫자는 원(KRW) 단위이므로 10,000으로 나누어 만원 단위로 복원 (예: 60,000,000원 -> 6,000만원)
+  while (num >= 5000000) {
+    num = num / 10000;
+  }
+  return Math.round(num);
 }
 
 /**
@@ -842,20 +927,137 @@ export function parseDraftYear(rawDraft: any): { draftYear: number; display: str
 }
 
 /**
- * 등록일수 파서 (예: 367 -> "2년 77일", 없으면 "0일" 반환)
+ * 1군 등록일수 기반 FA / 비FA 자격 판별 결과 인터페이스
+ */
+export interface ServiceTimeFaStatus {
+  raw: string | number;
+  display: string; // 예: "3년 53일"
+  seasons: number; // 1군 충족 시즌 수 (1시즌 = 145일 기준)
+  remainDays: number; // 잔여 일수
+  totalDays: number; // 환산 총 등록일수
+  isNonFA: boolean; // 7시즌(1,015일) 미만이면 비FA(true), 충족 시 FA(false)
+  faRequirementSeasons: number; // 기준 시즌 수 (7시즌)
+  remainingSeasonsToFA: number; // FA 취득까지 남은 시즌 수
+}
+
+/**
+ * 선수 등록일수 텍스트/숫자 파서 및 KBO 1군 등록일수 기준 FA 자격 취득 요건 판정 함수
+ * - KBO 규약: 정규시즌 1군 등록일수 145일 이상 = 1시즌 인정
+ * - FA 자격 기준: 정규시즌 7시즌 (총 1,015일) 이상 시 FA 충족, 미만 시 비FA
+ * - 지원 형식: '3년 53일', '3년', '488일', 숫자 488, '5시즌 30일' 등
+ */
+export function parseServiceTimeFaStatus(rawService: any): ServiceTimeFaStatus {
+  const FA_REQ_SEASONS = 7; // KBO FA 요건 기준 시즌 (약 7~8시즌 중 최소 7시즌)
+  const DAYS_PER_SEASON = 145; // 1시즌 인정 기준 등록일수
+
+  if (rawService === undefined || rawService === null || rawService === "" || rawService === "0" || rawService === 0) {
+    return {
+      raw: rawService ?? "",
+      display: "0일",
+      seasons: 0,
+      remainDays: 0,
+      totalDays: 0,
+      isNonFA: true,
+      faRequirementSeasons: FA_REQ_SEASONS,
+      remainingSeasonsToFA: FA_REQ_SEASONS
+    };
+  }
+
+  // 1. 순수 숫자 또는 숫자형 문자열 (예: 367, "367")
+  if (typeof rawService === "number" || /^\d+$/.test(String(rawService).trim())) {
+    const totalDays = typeof rawService === "number" ? rawService : parseInt(String(rawService).trim(), 10);
+    const seasons = Math.floor(totalDays / DAYS_PER_SEASON);
+    const remainDays = totalDays % DAYS_PER_SEASON;
+    const isNonFA = seasons < FA_REQ_SEASONS;
+    const display = seasons > 0 
+      ? (remainDays > 0 ? `${seasons}년 ${remainDays}일` : `${seasons}년`)
+      : `${totalDays}일`;
+
+    return {
+      raw: rawService,
+      display,
+      seasons,
+      remainDays,
+      totalDays,
+      isNonFA,
+      faRequirementSeasons: FA_REQ_SEASONS,
+      remainingSeasonsToFA: Math.max(0, FA_REQ_SEASONS - seasons)
+    };
+  }
+
+  const str = String(rawService).trim();
+
+  // 2. 'X년 Y일' 또는 'X시즌 Y일' 정규식 파싱
+  const yearMatch = str.match(/(\d+)\s*(?:년|시즌)/);
+  const dayMatch = str.match(/(\d+)\s*일/);
+
+  let parsedYears = yearMatch ? parseInt(yearMatch[1], 10) : 0;
+  let parsedDays = dayMatch ? parseInt(dayMatch[1], 10) : 0;
+
+  // '년'이나 '시즌' 없이 '250일' 형태인 경우
+  if (!yearMatch && dayMatch) {
+    const totalDays = parsedDays;
+    const seasons = Math.floor(totalDays / DAYS_PER_SEASON);
+    const remainDays = totalDays % DAYS_PER_SEASON;
+    const isNonFA = seasons < FA_REQ_SEASONS;
+    const display = seasons > 0 
+      ? (remainDays > 0 ? `${seasons}년 ${remainDays}일` : `${seasons}년`)
+      : `${totalDays}일`;
+
+    return {
+      raw: rawService,
+      display,
+      seasons,
+      remainDays,
+      totalDays,
+      isNonFA,
+      faRequirementSeasons: FA_REQ_SEASONS,
+      remainingSeasonsToFA: Math.max(0, FA_REQ_SEASONS - seasons)
+    };
+  }
+
+  // 'X년 Y일' 형태인 경우
+  const totalDays = parsedYears * DAYS_PER_SEASON + parsedDays;
+  const seasons = parsedYears + Math.floor(parsedDays / DAYS_PER_SEASON);
+  const remainDays = parsedDays % DAYS_PER_SEASON;
+  const isNonFA = seasons < FA_REQ_SEASONS;
+
+  const display = parsedYears > 0 
+    ? (remainDays > 0 ? `${parsedYears}년 ${remainDays}일` : `${parsedYears}년`)
+    : (parsedDays > 0 ? `${parsedDays}일` : str);
+
+  return {
+    raw: rawService,
+    display: display || str,
+    seasons,
+    remainDays,
+    totalDays,
+    isNonFA,
+    faRequirementSeasons: FA_REQ_SEASONS,
+    remainingSeasonsToFA: Math.max(0, FA_REQ_SEASONS - seasons)
+  };
+}
+
+/**
+ * 괄호 속 일수가 1,000단위가 넘어가면 콤마로 구분 (예: (1028일) -> (1,028일))
+ */
+export function formatServiceTimeWithComma(str: string): string {
+  if (!str) return "";
+  return str.replace(/\(([\d,]+)\s*일\)/g, (_, digits) => {
+    const num = parseInt(digits.replace(/,/g, ""), 10);
+    return isNaN(num) ? `(${digits}일)` : `(${num.toLocaleString()}일)`;
+  });
+}
+
+/**
+ * 등록일수 파서 (예: 568 -> "3년 133일 (568일)", 1028 -> "7년 13일 (1,028일)", 69 -> "69일", 없으면 "0일" 반환)
  */
 export function parseServiceTime(rawService: any): string {
-  if (!rawService || rawService === "0" || rawService === 0) return "0일";
-  if (typeof rawService === "number" || /^\d+$/.test(String(rawService).trim())) {
-    const days = typeof rawService === "number" ? rawService : parseInt(String(rawService).trim(), 10);
-    if (days >= 145) {
-      const years = Math.floor(days / 145);
-      const remainDays = days % 145;
-      return `${years}년 ${remainDays}일`;
-    }
-    return `${days}일`;
+  const status = parseServiceTimeFaStatus(rawService);
+  if (status.totalDays > 0 && status.seasons > 0 && !status.display.includes("일)")) {
+    return `${status.display} (${status.totalDays.toLocaleString()}일)`;
   }
-  return String(rawService);
+  return formatServiceTimeWithComma(status.display);
 }
 
 /**
@@ -926,8 +1128,8 @@ export async function fetchTeamRosterFromDatabase(teamName: string): Promise<DbT
         const warRaw = r["핵심 스탯(WAR)"] !== undefined ? r["핵심 스탯(WAR)"] : (r["WAR"] !== undefined ? r["WAR"] : (r.war !== undefined ? r.war : 0));
         const war = typeof warRaw === "number" ? warRaw : (parseFloat(String(warRaw)) || 0);
 
-        // 연봉 파싱
-        const salary = parsePlayerSalary(r["현재 연봉"] !== undefined ? r["현재 연봉"] : (r["현재연봉"] !== undefined ? r["현재연봉"] : (r["연봉"] !== undefined ? r["연봉"] : r.salary)));
+        // 연봉 파싱 (DB 순수 숫자 형태 그대로 만원 단위 보존)
+        const salary = parsePlayerSalaryToManwon(r["현재 연봉"] !== undefined ? r["현재 연봉"] : (r["현재연봉"] !== undefined ? r["현재연봉"] : (r["연봉"] !== undefined ? r["연봉"] : r.salary)));
 
         // 입단 연도 파싱
         const draftInfo = parseDraftYear(r["입단 연도"] !== undefined ? r["입단 연도"] : (r["입단연도"] !== undefined ? r["입단연도"] : r.draftYear));
@@ -989,11 +1191,11 @@ export interface DbSavePlayerPayload {
   "구단": string;
   "포지션": string;
   "나이": number;
-  "타율"?: number;
-  "OPS"?: number;
-  "홈런"?: number;
-  "ERA"?: number;
-  "WHIP"?: number;
+  "타율"?: number | string;
+  "OPS"?: number | string;
+  "홈런"?: number | string;
+  "ERA"?: number | string;
+  "WHIP"?: number | string;
   "승/홀/세"?: string;
   "최근 WAR": number;
   "현재 연봉": number;
@@ -1004,33 +1206,194 @@ export interface DbSavePlayerPayload {
 }
 
 /**
- * 선수 데이터 영구 저장 처리 (구글 스프레드시트 백엔드 연동 및 로컬 보관)
- * 단일 전송 원칙을 적용하여 중복 저장 방지
+ * Player 객체를 App_data_DB 구글 시트 규격에 일치하는 Payload로 변환하는 유틸리티
  */
-export async function savePlayerToDatabase(payload: DbSavePlayerPayload): Promise<{ success: boolean; remoteSaved?: boolean; data?: any; error?: string }> {
+export function convertPlayerToAppDbPayload(player: Player, action: "update" | "save" = "update"): Record<string, any> {
+  const cleanName = (player.name || "").trim();
+  const rawPos = player.position || "내야수";
+  const isPitcher = rawPos.includes("투수");
+
+  // 1. 최신 유효 스탯 추출 (역순 탐색으로 가장 최근의 실적 우선 확보)
+  let latestStat: PlayerStat | undefined;
+  if (Array.isArray(player.stats) && player.stats.length > 0) {
+    for (let i = player.stats.length - 1; i >= 0; i--) {
+      const st = player.stats[i];
+      if (isPitcher) {
+        if ((st.era !== undefined && st.era > 0) || (st.whip !== undefined && st.whip > 0) || st.wls) {
+          latestStat = st;
+          break;
+        }
+      } else {
+        if ((st.avg !== undefined && st.avg > 0) || (st.ops !== undefined && st.ops > 0) || (st.hr !== undefined && st.hr > 0)) {
+          latestStat = st;
+          break;
+        }
+      }
+    }
+    if (!latestStat) {
+      latestStat = player.stats[player.stats.length - 1];
+    }
+  }
+
+  // 2. 타자 스탯 (투수면 공백)
+  let finalAvg: any = "";
+  let finalOps: any = "";
+  let finalHr: any = "";
+  if (!isPitcher && latestStat) {
+    if (latestStat.avg !== undefined && latestStat.avg !== null && !isNaN(latestStat.avg)) {
+      finalAvg = typeof latestStat.avg === "number" ? Number(latestStat.avg.toFixed(3)) : latestStat.avg;
+    }
+    if (latestStat.ops !== undefined && latestStat.ops !== null && !isNaN(latestStat.ops)) {
+      finalOps = typeof latestStat.ops === "number" ? Number(latestStat.ops.toFixed(3)) : latestStat.ops;
+    }
+    if (latestStat.hr !== undefined && latestStat.hr !== null && !isNaN(latestStat.hr)) {
+      finalHr = Number(latestStat.hr);
+    }
+  }
+
+  // 3. 투수 스탯 (타자면 공백)
+  let finalEra: any = "";
+  let finalWhip: any = "";
+  let finalWls: any = "";
+  if (isPitcher && latestStat) {
+    if (latestStat.era !== undefined && latestStat.era !== null && !isNaN(latestStat.era)) {
+      finalEra = typeof latestStat.era === "number" ? Number(latestStat.era.toFixed(2)) : latestStat.era;
+    }
+    if (latestStat.whip !== undefined && latestStat.whip !== null && !isNaN(latestStat.whip)) {
+      finalWhip = typeof latestStat.whip === "number" ? Number(latestStat.whip.toFixed(2)) : latestStat.whip;
+    }
+    if (latestStat.wls) {
+      finalWls = String(latestStat.wls);
+    }
+  }
+
+  // 4. WAR 추출 (소수점 2자리)
+  let war: any = "";
+  if (latestStat?.war !== undefined && latestStat?.war !== null && !isNaN(latestStat.war)) {
+    war = typeof latestStat.war === "number" ? Number(latestStat.war.toFixed(2)) : parseFloat(String(latestStat.war)) || 0;
+  }
+
+  // 5. 연봉 만원 단위 복원 (예: 60,000,000 -> 6000)
+  const salaryManwon = parsePlayerSalaryToManwon(player.salaryCurrent);
+
+  // 6. 구단명 축약 (예: "롯데 자이언츠" -> "롯데")
+  const shortTeam = (player.team || "").replace(/(트윈스|위즈|랜더스|다이노스|베어스|타이거즈|라이온즈|히어로즈|이글스|자이언츠)/g, "").trim() || player.team || "롯데";
+
+  // 7. 계약기간
+  const contractPeriodText = player.contractPeriod || "";
+
+  return {
+    "선수명": cleanName,
+    "name": cleanName,
+    "구단": shortTeam,
+    "team": shortTeam,
+    "포지션": player.position,
+    "position": player.position,
+    "나이": player.age || 24,
+    "age": player.age || 24,
+    // 타자 스탯
+    "타율": finalAvg,
+    "OPS": finalOps,
+    "홈런": finalHr,
+    // 투수 스탯
+    "ERA": finalEra,
+    "WHIP": finalWhip,
+    "승/홀/세": finalWls,
+    "승률": finalWls,
+    // 공통 메타데이터
+    "최근 WAR": war !== "" ? war : "",
+    "WAR": war !== "" ? war : "",
+    "현재 연봉": salaryManwon,
+    "salary": salaryManwon,
+    "에이전트 계약기간": contractPeriodText,
+    "에이전트 계약기간 관리": contractPeriodText,
+    "에이전트": player.agent || "미지정",
+    "담당 에이전트": player.agent || "미지정",
+    "입단 연도": player.draftYear > 0 ? player.draftYear : "",
+    "등록일수": player.serviceTime || "",
+    "관리": "",
+    "sheetName": "App_data_DB",
+    "targetSheet": "App_data_DB",
+    "type": "agency",
+    "action": action
+  };
+}
+
+/**
+ * 선수 데이터 영구 저장 처리 (구글 스프레드시트 App_data_DB 백엔드 연동 및 덮어쓰기)
+ * 1순위: 백엔드 프록시 (/api/db/save-player) 전송 (Node.js를 통한 브라우저 CORS 회피 및 302 리다이렉트 추적)
+ * 2순위: 프록시 실패 시 브라우저 직접 fetch(no-cors) fallback
+ */
+export async function savePlayerToDatabase(payload: DbSavePlayerPayload | Record<string, any>): Promise<{ success: boolean; remoteSaved?: boolean; data?: any; error?: string }> {
   const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
   let remoteSaved = false;
 
-  try {
-    console.log('DB 전송 데이터:', payload);
+  const targetSheet = payload.sheetName || payload.targetSheet || "App_data_DB";
+  const targetType = payload.type || (targetSheet === "Sample_Player_DB" ? "sample_player" : "agency");
+  const targetAction = payload.action || "update";
+  const playerName = payload["선수명"] || payload.name || "";
+  const requestUrl = `${GAS_URL}?sheetName=${encodeURIComponent(targetSheet)}&targetSheet=${encodeURIComponent(targetSheet)}&type=${encodeURIComponent(targetType)}&action=${encodeURIComponent(targetAction)}&name=${encodeURIComponent(playerName)}&선수명=${encodeURIComponent(playerName)}&t=${Date.now()}`;
 
-    // 단일 POST 요청 전송
-    await fetch(GAS_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/plain;charset=utf-8",
-      },
-      body: JSON.stringify(payload),
-      mode: "no-cors",
-    });
-    remoteSaved = true;
+  const cleanPayload: Record<string, any> = {
+    ...payload,
+    sheetName: targetSheet,
+    targetSheet,
+    type: targetType,
+    action: targetAction,
+  };
+
+  try {
+    console.log('[savePlayerToDatabase] 전송 시작:', cleanPayload["선수명"] || cleanPayload.name, '타겟 시트:', targetSheet, '액션:', targetAction);
+
+    // 1순위: 백엔드 프록시 (/api/db/save-player) 전송 시도
+    try {
+      const proxyRes = await fetch("/api/db/save-player", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(cleanPayload),
+      });
+      if (proxyRes.ok) {
+        const json = await proxyRes.json();
+        if (json.remoteSaved || json.success) {
+          remoteSaved = true;
+          console.log(`[savePlayerToDatabase] '${cleanPayload["선수명"] || cleanPayload.name}' 백엔드 프록시 전송 성공`);
+          return {
+            success: true,
+            remoteSaved: true,
+            data: json,
+          };
+        }
+      }
+    } catch (proxyErr) {
+      console.warn("[savePlayerToDatabase] Backend proxy save warning, fallback to direct fetch:", proxyErr);
+    }
+
+    // 2순위: 백엔드 프록시 미응답/실패 시 브라우저에서 직접 전송 fallback
+    if (!remoteSaved) {
+      try {
+        await fetch(requestUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8",
+          },
+          body: JSON.stringify(cleanPayload),
+          mode: "no-cors",
+        });
+        remoteSaved = true;
+        console.log(`[savePlayerToDatabase] '${cleanPayload["선수명"] || cleanPayload.name}' 브라우저 직접 fetch 전송 완료`);
+      } catch (directErr) {
+        console.warn("[savePlayerToDatabase] Direct fetch error:", directErr);
+      }
+    }
 
     return {
       success: true,
       remoteSaved,
     };
   } catch (error: any) {
-    console.error('DB 저장 실패:', error);
+    console.error('[savePlayerToDatabase] DB 저장 실패:', error);
     return {
       success: true,
       remoteSaved: false,
@@ -1038,3 +1401,249 @@ export async function savePlayerToDatabase(payload: DbSavePlayerPayload): Promis
     };
   }
 }
+
+/**
+ * 소속 선수 (App_data_DB) 데이터베이스 영구 삭제 처리 함수
+ * 1순위: 백엔드 프록시 (/api/db/delete-player) 전송 (Node.js 환경)
+ * 2순위: 프록시 실패 시 브라우저 직접 fetch(no-cors) fallback
+ */
+export async function deletePlayerFromDatabase(player: { id: string; name: string; team?: string }): Promise<{ success: boolean; remoteDeleted?: boolean; error?: string }> {
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+  let remoteDeleted = false;
+
+  const cleanName = (player.name || "").trim();
+  const deletePayload: Record<string, any> = {
+    action: "delete",
+    mode: "delete",
+    method: "delete",
+    type: "agency",
+    sheetName: "App_data_DB",
+    targetSheet: "App_data_DB",
+    id: player.id,
+    ID: player.id,
+    name: cleanName,
+    "선수명": cleanName,
+    team: player.team || "",
+    "구단": player.team || "",
+  };
+
+  try {
+    console.log('[deletePlayerFromDatabase] 삭제 요청 전송 시작:', cleanName);
+
+    // 1순위: 백엔드 프록시 (/api/db/delete-player) 전송 시도
+    try {
+      const proxyRes = await fetch("/api/db/delete-player", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(deletePayload),
+      });
+      if (proxyRes.ok) {
+        const json = await proxyRes.json();
+        if (json.remoteDeleted || json.success) {
+          remoteDeleted = true;
+          console.log(`[deletePlayerFromDatabase] '${cleanName}' 백엔드 프록시 삭제 성공`);
+          return {
+            success: true,
+            remoteDeleted: true,
+          };
+        }
+      }
+    } catch (proxyErr) {
+      console.warn("[deletePlayerFromDatabase] Backend proxy delete warning, fallback to direct fetch:", proxyErr);
+    }
+
+    // 2순위: 브라우저에서 직접 fetch (no-cors) fallback
+    if (!remoteDeleted) {
+      try {
+        const requestUrl = `${GAS_URL}?sheetName=App_data_DB&targetSheet=App_data_DB&type=agency&action=delete&mode=delete&name=${encodeURIComponent(cleanName)}&선수명=${encodeURIComponent(cleanName)}&id=${encodeURIComponent(player.id)}&t=${Date.now()}`;
+        await fetch(requestUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8",
+          },
+          body: JSON.stringify(deletePayload),
+          mode: "no-cors",
+        });
+        remoteDeleted = true;
+        console.log(`[deletePlayerFromDatabase] '${cleanName}' 브라우저 직접 fetch 삭제 요청 전송 완료`);
+      } catch (directErr) {
+        console.warn("[deletePlayerFromDatabase] Direct fetch delete error:", directErr);
+      }
+    }
+
+    return {
+      success: true,
+      remoteDeleted,
+    };
+  } catch (error: any) {
+    console.error('[deletePlayerFromDatabase] DB 삭제 실패:', error);
+    return {
+      success: true,
+      remoteDeleted: false,
+      error: error?.message,
+    };
+  }
+}
+
+// 샘플 선수 중복 저장 방지를 위한 클라이언트 인메모리 타임스탬프 맵
+const recentSampleSaves = new Map<string, number>();
+
+/**
+ * 가상 / 샘플 선수 전용 데이터베이스 영구 저장 함수
+ * 오직 'Sample_Player_DB' 시트로만 격리 저장
+ * 단일 요청 보장: 1순위 백엔드 프록시 성공 시 2순위 직접 전송을 절대 중복 실행하지 않음
+ */
+export async function saveSamplePlayerToDatabase(payload: any): Promise<{ success: boolean; remoteSaved?: boolean; data?: any; error?: string }> {
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+  let remoteSaved = false;
+
+  const playerId = payload.id || payload.ID || payload.name;
+  const now = Date.now();
+
+  // 클라이언트 측 중복 저장 방지 (3초 이내 동일 선수 저장 요청 무시)
+  if (playerId && recentSampleSaves.has(playerId)) {
+    const lastSaved = recentSampleSaves.get(playerId)!;
+    if (now - lastSaved < 3000) {
+      console.log(`[클라이언트 중복 방지] 선수(${playerId}) 중복 저장 요청 무시 (최근 3초 내 저장 완료)`);
+      return { success: true, remoteSaved: true };
+    }
+  }
+  if (playerId) {
+    recentSampleSaves.set(playerId, now);
+    if (recentSampleSaves.size > 50) {
+      for (const [k, t] of recentSampleSaves.entries()) {
+        if (now - t > 60000) recentSampleSaves.delete(k);
+      }
+    }
+  }
+
+  const samplePayload = {
+    ...payload,
+    sheetName: "Sample_Player_DB",
+    targetSheet: "Sample_Player_DB",
+    sheet: "Sample_Player_DB",
+    type: "sample_player",
+    action: payload.action || "save_sample",
+    isSample: true,
+  };
+
+  // Google Apps Script의 e.parameter 및 e.postData 양쪽 모두에서 Sample_Player_DB를 감지할 수 있도록 쿼리 스트링 구성
+  const requestUrl = `${GAS_URL}?sheetName=Sample_Player_DB&targetSheet=Sample_Player_DB&type=sample_player&action=${encodeURIComponent(samplePayload.action)}&t=${Date.now()}`;
+
+  try {
+    console.log('Sample_Player_DB 전용 단일 전송 시작:', samplePayload);
+
+    // 1순위: 백엔드 프록시 (/api/db/save-player) 전송 (Node.js 서버에서 302 리다이렉트 및 브라우저 iframe 제약 없이 안정 처리)
+    try {
+      const proxyRes = await fetch("/api/db/save-player", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(samplePayload),
+      });
+      if (proxyRes.ok) {
+        const json = await proxyRes.json();
+        if (json.remoteSaved || json.success) {
+          remoteSaved = true;
+          // [핵심 해결] 프록시 전송이 성공했으므로 2순위 직접 전송을 절대 실행하지 않고 즉시 리턴 (2개씩 중복 입력되는 현상 차단)
+          console.log('Sample_Player_DB 백엔드 프록시 전송 성공 (단일 전송 완료)');
+          return {
+            success: true,
+            remoteSaved: true,
+            data: json,
+          };
+        }
+      }
+    } catch (proxyErr) {
+      console.warn("Backend proxy save warning, fallback to direct fetch:", proxyErr);
+    }
+
+    // 2순위: 1순위 프록시가 실패했을 때만 브라우저 직접 구글 Apps Script Web App 전송 (예비 안전망)
+    if (!remoteSaved) {
+      try {
+        await fetch(requestUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8",
+          },
+          body: JSON.stringify(samplePayload),
+          mode: "no-cors",
+        });
+        remoteSaved = true;
+        console.log('Sample_Player_DB 직접 전송 예비 실행 완료');
+      } catch (directErr) {
+        console.warn("Direct fetch warning:", directErr);
+      }
+    }
+
+    return {
+      success: true,
+      remoteSaved,
+    };
+  } catch (error: any) {
+    console.error('Sample_Player_DB 저장 실패:', error);
+    return {
+      success: true,
+      remoteSaved: false,
+      error: error?.message,
+    };
+  }
+}
+
+/**
+ * 가상 / 샘플 선수 데이터베이스(Sample_Player_DB) 원격 삭제 함수
+ * 단일 전송 원칙 적용: 구글 Apps Script Web App으로 삭제 action 직접 전송
+ */
+export async function deleteSamplePlayerFromDatabase(player: { id: string; name?: string; team?: string }): Promise<{ success: boolean; remoteDeleted?: boolean; error?: string }> {
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
+  let remoteDeleted = false;
+
+  const deletePayload = {
+    action: "delete_sample",
+    mode: "delete",
+    method: "delete",
+    sheetName: "Sample_Player_DB",
+    targetSheet: "Sample_Player_DB",
+    sheet: "Sample_Player_DB",
+    type: "sample_player",
+    id: player.id,
+    ID: player.id,
+    name: player.name || "",
+    선수명: player.name || "",
+    team: player.team || "",
+    소속구단: player.team || "",
+    isSample: true,
+  };
+
+  const requestUrl = `${GAS_URL}?sheetName=Sample_Player_DB&targetSheet=Sample_Player_DB&type=sample_player&action=delete_sample&mode=delete&id=${encodeURIComponent(player.id)}&name=${encodeURIComponent(player.name || "")}&t=${Date.now()}`;
+
+  try {
+    console.log('Sample_Player_DB 삭제 요청 전송:', deletePayload);
+
+    await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain;charset=utf-8",
+      },
+      body: JSON.stringify(deletePayload),
+      mode: "no-cors",
+    });
+    remoteDeleted = true;
+
+    return {
+      success: true,
+      remoteDeleted,
+    };
+  } catch (error: any) {
+    console.error('Sample_Player_DB 삭제 실패:', error);
+    return {
+      success: false,
+      remoteDeleted: false,
+      error: error?.message,
+    };
+  }
+}
+

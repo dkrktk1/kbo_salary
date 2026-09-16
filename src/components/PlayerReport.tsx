@@ -176,19 +176,22 @@ function extractProfileSummary(records: any[], playerName: string): {
   // 2. 연봉 포맷팅 (만원 단위 기준)
   let formattedSalary = "데이터 없음";
   if (foundSalaryRaw !== undefined && foundSalaryRaw !== null && foundSalaryRaw !== "") {
-    const num = typeof foundSalaryRaw === "number" 
+    let num = typeof foundSalaryRaw === "number" 
       ? foundSalaryRaw 
-      : parseFloat(String(foundSalaryRaw).replace(/[^0-9.-]/g, ""));
+      : parseFloat(String(foundSalaryRaw).replace(/,/g, "").replace(/[^0-9.-]/g, ""));
     if (!isNaN(num) && num > 0) {
-      // 10000000 이상(원 단위)이면 만원 단위로 변환
-      const manwon = num >= 10000000 ? Math.round(num / 10000) : Math.round(num);
+      while (num > 50000000000) {
+        num = Math.round(num / 10000);
+      }
+      // 5,000,000 이상(원 단위)이면 만원 단위로 변환
+      const manwon = num >= 5000000 ? Math.round(num / 10000) : Math.round(num);
       if (manwon >= 10000) {
         const eok = Math.floor(manwon / 10000);
         const rest = manwon % 10000;
         if (rest > 0) {
-          formattedSalary = `${eok}억 ${rest.toLocaleString()}만원`;
+          formattedSalary = `${eok.toLocaleString()}억 ${rest.toLocaleString()}만원`;
         } else {
-          formattedSalary = `${eok}억원`;
+          formattedSalary = `${eok.toLocaleString()}억원`;
         }
       } else {
         formattedSalary = `${manwon.toLocaleString()}만원`;

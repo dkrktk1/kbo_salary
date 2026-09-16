@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { mockTeams, Player, PlayerStat, AVAILABLE_AGENTS, getAgentBadgeStyle } from "../data";
+import { mockTeams, Player, PlayerStat, AVAILABLE_AGENTS, getAgentBadgeStyle, KBO_AGENCY_DB_METADATA } from "../data";
+import { formatServiceTimeWithComma, savePlayerToDatabase } from "../services/dbService";
 import {
   X,
   Sparkles,
@@ -79,12 +80,22 @@ function EditPlayerModalContent({
   onClose,
   onSave
 }: EditPlayerModalContentProps) {
+  const cleanPlayerName = (player.name || "").trim();
+
+  const meta = KBO_AGENCY_DB_METADATA[cleanPlayerName];
+  const initialDraftYear = (!player.draftYear || (player.draftYear === 2018 && cleanPlayerName !== "곽빈"))
+    ? (meta?.draftYear || player.draftYear || 0)
+    : (player.draftYear || 0);
+  const initialServiceTime = (!player.serviceTime || player.serviceTime === "0일" || player.serviceTime === "1년 0일" || player.serviceTime === "-")
+    ? (meta?.serviceTime || player.serviceTime || "0일")
+    : (player.serviceTime || "0일");
+
   const [name, setName] = useState(player.name);
   const [team, setTeam] = useState(player.team);
   const [position, setPosition] = useState(player.position);
-  const [age, setAge] = useState<number>(player.age || 25);
-  const [draftYear, setDraftYear] = useState<number>(player.draftYear || 2021);
-  const [serviceTime, setServiceTime] = useState<string>(player.serviceTime || "3년 0일");
+  const [age, setAge] = useState<number>(player.age || 0);
+  const [draftYear, setDraftYear] = useState<number>(initialDraftYear);
+  const [serviceTime, setServiceTime] = useState<string>(formatServiceTimeWithComma(initialServiceTime));
   const [salaryManwon, setSalaryManwon] = useState<number>(
     Math.round((player.salaryCurrent || 0) / 10000)
   );
@@ -94,28 +105,30 @@ function EditPlayerModalContent({
   const s25 = player.stats?.find((s) => s.year === 2025);
   const s24 = player.stats?.find((s) => s.year === 2024);
 
-  const [avg, setAvg] = useState<string>(s26?.avg !== undefined ? s26.avg.toFixed(3) : "0.285");
-  const [ops, setOps] = useState<string>(s26?.ops !== undefined ? s26.ops.toFixed(3) : "0.820");
-  const [hr, setHr] = useState<number>(s26?.hr ?? 12);
-  const [war, setWar] = useState<number>(s26?.war ?? 2.8);
-  const [era, setEra] = useState<number>(s26?.era !== undefined ? Number(s26.era.toFixed(2)) : 3.85);
-  const [whip, setWhip] = useState<number>(s26?.whip ?? 1.25);
-  const [wls, setWls] = useState<string>(s26?.wls ?? "10승 5패");
+  const initialWar = s26?.war ?? 0;
+
+  const [avg, setAvg] = useState<string>(s26?.avg !== undefined ? s26.avg.toFixed(3) : "0.000");
+  const [ops, setOps] = useState<string>(s26?.ops !== undefined ? s26.ops.toFixed(3) : "0.000");
+  const [hr, setHr] = useState<number>(s26?.hr ?? 0);
+  const [war, setWar] = useState<number>(initialWar);
+  const [era, setEra] = useState<number>(s26?.era !== undefined ? Number(s26.era.toFixed(2)) : 0);
+  const [whip, setWhip] = useState<number>(s26?.whip ?? 0);
+  const [wls, setWls] = useState<string>(s26?.wls ?? "");
 
   const [showYearlyDetails, setShowYearlyDetails] = useState(false);
   const [stat2024, setStat2024] = useState({
-    avg: s24?.avg ?? 0.265,
-    ops: s24?.ops ?? 0.770,
-    hr: s24?.hr ?? 8,
-    war: s24?.war ?? 2.1,
-    salaryManwon: Math.round((s24?.salary ?? 75000000) / 10000),
+    avg: s24?.avg ?? 0,
+    ops: s24?.ops ?? 0,
+    hr: s24?.hr ?? 0,
+    war: s24?.war ?? 0,
+    salaryManwon: Math.round((s24?.salary ?? 0) / 10000),
   });
   const [stat2025, setStat2025] = useState({
-    avg: s25?.avg ?? 0.275,
-    ops: s25?.ops ?? 0.800,
-    hr: s25?.hr ?? 10,
-    war: s25?.war ?? 2.5,
-    salaryManwon: Math.round((s25?.salary ?? 85000000) / 10000),
+    avg: s25?.avg ?? 0,
+    ops: s25?.ops ?? 0,
+    hr: s25?.hr ?? 0,
+    war: s25?.war ?? 0,
+    salaryManwon: Math.round((s25?.salary ?? 0) / 10000),
   });
 
   const parsedDates = parseDatesFromPeriod(player.contractPeriod);
@@ -134,21 +147,32 @@ function EditPlayerModalContent({
 
   useEffect(() => {
     if (player) {
+      const pName = (player.name || "").trim();
+      const meta = KBO_AGENCY_DB_METADATA[pName];
+      let dYear = player.draftYear || 0;
+      if (!dYear || (dYear === 2018 && pName !== "곽빈")) {
+        dYear = meta?.draftYear || dYear;
+      }
+      let sTime = player.serviceTime || "0일";
+      if (!sTime || sTime === "0일" || sTime === "1년 0일" || sTime === "-") {
+        sTime = meta?.serviceTime || sTime;
+      }
+
       setName(player.name);
       setTeam(player.team);
       setPosition(player.position);
-      setAge(player.age || 25);
-      setDraftYear(player.draftYear || 2021);
-      setServiceTime(player.serviceTime || "3년 0일");
+      setAge(player.age || 0);
+      setDraftYear(dYear);
+      setServiceTime(formatServiceTimeWithComma(sTime));
       setSalaryManwon(Math.round((player.salaryCurrent || 0) / 10000));
       const latest = player.stats?.find((s) => s.year === 2026) || player.stats?.[player.stats.length - 1];
-      setAvg(latest?.avg !== undefined ? latest.avg.toFixed(3) : "0.285");
-      setOps(latest?.ops !== undefined ? latest.ops.toFixed(3) : "0.820");
-      setHr(latest?.hr ?? 12);
-      setWar(latest?.war ?? 2.8);
-      setEra(latest?.era !== undefined ? Number(latest.era.toFixed(2)) : 3.85);
-      setWhip(latest?.whip ?? 1.25);
-      setWls(latest?.wls ?? "10승 5패");
+      setAvg(latest?.avg !== undefined ? latest.avg.toFixed(3) : "0.000");
+      setOps(latest?.ops !== undefined ? latest.ops.toFixed(3) : "0.000");
+      setHr(latest?.hr ?? 0);
+      setWar(latest?.war ?? 0);
+      setEra(latest?.era !== undefined ? Number(latest.era.toFixed(2)) : 0);
+      setWhip(latest?.whip ?? 0);
+      setWls(latest?.wls ?? "");
       setAgent(getPlayerAgent(player));
       const d = parseDatesFromPeriod(player.contractPeriod);
       setContractStartDate(d.start);
@@ -283,14 +307,8 @@ function EditPlayerModalContent({
     try {
       console.log("선수 수정 DB 전송 데이터 (action: update):", payload);
 
-      await fetch(GAS_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/plain;charset=utf-8",
-        },
-        body: JSON.stringify(payload),
-        mode: "no-cors",
-      });
+      // savePlayerToDatabase를 통해 백엔드 프록시 및 fallback으로 안전하게 전송
+      await savePlayerToDatabase(payload);
 
       // 3. 응답 성공 시 프론트엔드 상태 확정 및 모달 닫기
       onSave(updated);
