@@ -418,20 +418,13 @@ export function AddPlayerModal({
 
     setIsSubmitting(true);
 
-    // 구글 Apps Script Web App URL
-    const GAS_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
-
     try {
-      console.log('DB 전송 데이터:', payload);
+      console.log('DB 전송 데이터 (savePlayerToDatabase):', payload);
 
-      // 구글 Apps Script Web App으로 단일 POST 요청 전송 (중복 호출 방지)
-      await fetch(GAS_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/plain;charset=utf-8",
-        },
-        body: JSON.stringify(payload),
-        mode: "no-cors",
+      // 백엔드 프록시 및 중복 방지 로직이 내장된 savePlayerToDatabase 호출
+      await savePlayerToDatabase({
+        ...payload,
+        force: true,
       });
 
       const finalStats: PlayerStat[] = [

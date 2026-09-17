@@ -307,8 +307,11 @@ function EditPlayerModalContent({
     try {
       console.log("선수 수정 DB 전송 데이터 (action: update):", payload);
 
-      // savePlayerToDatabase를 통해 백엔드 프록시 및 fallback으로 안전하게 전송
-      await savePlayerToDatabase(payload);
+      // savePlayerToDatabase를 통해 백엔드 프록시 및 fallback으로 안전하게 전송 (force: true로 즉시 덮어쓰기 보장)
+      await savePlayerToDatabase({
+        ...payload,
+        force: true,
+      });
 
       // 3. 응답 성공 시 프론트엔드 상태 확정 및 모달 닫기
       onSave(updated);

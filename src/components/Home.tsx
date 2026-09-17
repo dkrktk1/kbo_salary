@@ -15,7 +15,9 @@ import {
   extractWlsFromObject,
   convertPlayerToAppDbPayload,
   savePlayerToDatabase,
-  deletePlayerFromDatabase
+  deletePlayerFromDatabase,
+  mapRawToPlayer,
+  fetchAppDataFromDatabase
 } from "../services/dbService";
 import {
   Users,
@@ -126,132 +128,6 @@ export function extractAgentName(raw: any): string {
   return "미정";
 }
 
-/**
- * 원시 데이터(Raw Record)를 대시보드 Player 객체 규격으로 안전하게 변환하는 헬퍼 함수
- */
-function mapRawToPlayer(raw: any, index: number): Player | null {
-  if (!raw || typeof raw !== "object") return null;
-
-  const contractPeriod = extractContractPeriod(raw);
-  const agent = extractAgentName(raw);
-
-  // 이미 완성된 Player 규격을 갖춘 경우
-  if (raw.id && raw.name && raw.team && Array.isArray(raw.stats) && raw.stats.length > 0) {
-    const cleanName = String(raw.name).trim();
-    const cleanStats = (raw.stats as PlayerStat[]).map(st => ({
-      ...st,
-      war: typeof st.war === "number" ? Number(st.war.toFixed(2)) : (st.war ? Number(parseFloat(String(st.war)).toFixed(2)) : 0)
-    }));
-    const meta = KBO_AGENCY_DB_METADATA[cleanName];
-    let dYear = parseDraftYear(raw.draftYear).draftYear;
-    if (!dYear || (dYear === 2018 && cleanName !== "곽빈")) {
-      dYear = meta?.draftYear || dYear || 0;
-    }
-    let sTime = parseServiceTime(raw.serviceTime);
-    if (!sTime || sTime === "0일" || sTime === "1년 0일" || sTime === "-") {
-      sTime = meta?.serviceTime || sTime || "-";
-    }
-
-    return {
-      id: String(raw.id),
-      name: cleanName,
-      team: String(raw.team).trim(),
-      position: cleanPosition(raw.position || "외야수"),
-      age: parsePlayerAge(raw.age),
-      salaryCurrent: parsePlayerSalary(raw.salaryCurrent),
-      draftYear: dYear,
-      serviceTime: sTime,
-      contractPeriod,
-      agent,
-      stats: cleanStats
-    };
-  }
-
-  const name = raw.name || raw["선수명"] || raw["이름"] || "";
-  if (!name || name === "선수" || name === "선수명") return null;
-
-  const cleanName = String(name).trim();
-  const team = raw.team || raw["구단"] || raw["팀"] || raw["소속"] || raw["팀명"] || "롯데 자이언츠";
-  const position = cleanPosition(raw.position || raw["포지션"] || "외야수");
-  const age = parsePlayerAge(raw.age ?? raw["나이"] ?? 27);
-  const salaryCurrent = parsePlayerSalary(raw.salaryCurrent ?? raw["현재 연봉"] ?? raw["현재연봉"] ?? raw["연봉"] ?? raw.salary);
-  const draftInfo = parseDraftYear(raw.draftYear ?? raw["입단 연도"] ?? raw["입단연도"]);
-  const rawService = raw.serviceTime ?? raw["등록일수"] ?? raw["총등록일수"] ?? "";
-  const serviceTime = parseServiceTime(rawService);
-
-  // DB 메타데이터 및 실제 파싱값 기반 정상 매핑 (하드코딩 2018년 및 1년 0일 제거)
-  const meta = KBO_AGENCY_DB_METADATA[cleanName];
-  let finalDraftYear = draftInfo.draftYear > 0 ? draftInfo.draftYear : (meta?.draftYear || 0);
-  let finalServiceTime = (serviceTime && serviceTime !== "0일" && serviceTime !== "1년 0일" && serviceTime !== "-")
-    ? serviceTime
-    : (meta?.serviceTime || serviceTime || "-");
-
-  // stats 추출
-  let stats: PlayerStat[] = [];
-  if (Array.isArray(raw.stats) && raw.stats.length > 0) {
-    stats = raw.stats.map((st: any) => ({
-      ...st,
-      war: typeof st.war === "number" ? Number(st.war.toFixed(2)) : (st.war ? Number(parseFloat(String(st.war)).toFixed(2)) : 0)
-    }));
-  } else {
-    const rawWar =
-      raw["핵심 스탯(WAR)"] ??
-      raw["핵심스탯(WAR)"] ??
-      raw["최근 WAR"] ??
-      raw["최근WAR"] ??
-      raw["WAR"] ??
-      raw.WAR ??
-      raw.war ??
-      raw.War ??
-      raw["기여도"];
-    let war: number = 0;
-    if (rawWar !== undefined && rawWar !== null && rawWar !== "" && rawWar !== "-") {
-      const parsed = typeof rawWar === "number" ? rawWar : parseFloat(String(rawWar).replace(/[^0-9.-]/g, ""));
-      if (!isNaN(parsed)) {
-        war = Number(parsed.toFixed(2));
-      }
-    }
-    const rawAvg = raw["타율"] ?? raw["AVG"] ?? raw.avg ?? 0;
-    const avg = typeof rawAvg === "number" ? rawAvg : (parseFloat(String(rawAvg)) || undefined);
-    const rawOps = raw["OPS"] ?? raw.ops ?? 0;
-    const ops = typeof rawOps === "number" ? rawOps : (parseFloat(String(rawOps)) || undefined);
-    const rawHr = raw["홈런"] ?? raw["HR"] ?? raw.hr ?? 0;
-    const hr = typeof rawHr === "number" ? rawHr : (parseInt(String(rawHr), 10) || undefined);
-
-    const era = extractEraFromObject(raw);
-    const whip = extractWhipFromObject(raw);
-    const wls = extractWlsFromObject(raw);
-
-    stats = [
-      {
-        year: 2026,
-        avg: avg !== undefined && !isNaN(avg) ? avg : undefined,
-        ops: ops !== undefined && !isNaN(ops) ? ops : undefined,
-        hr: hr !== undefined && !isNaN(hr) ? hr : undefined,
-        era: era !== undefined && !isNaN(era) ? era : undefined,
-        whip: whip !== undefined && !isNaN(whip) ? whip : undefined,
-        wls: wls || undefined,
-        war: Number(war.toFixed(2)),
-        salary: salaryCurrent
-      }
-    ];
-  }
-
-  return {
-    id: String(raw.id || raw.playerId || `gas_player_${index}_${Date.now()}`),
-    name: cleanName,
-    team: String(team).trim(),
-    position,
-    age,
-    salaryCurrent,
-    draftYear: finalDraftYear,
-    serviceTime: finalServiceTime,
-    contractPeriod,
-    agent,
-    stats
-  };
-}
-
 export default function Home() {
   const [players, setPlayers] = useState<Player[]>(loadStoredPlayers);
   const [activeTab, setActiveTab] = useState<"batter" | "pitcher">("batter");
@@ -269,47 +145,12 @@ export default function Home() {
   // 구글 Apps Script Web App 직접 하드코딩 엔드포인트 주소
   const GAS_DB_URL = "https://script.google.com/macros/s/AKfycbzuv-TBMbIKSM0gUPrb3d99kG82BWvKTXrrdOyQhlYvWf1QKOG5dsNNC5xFM74c/exec";
 
-  // 1. 초기 데이터 로드: 메인 대시보드가 처음 렌더링될 때 App_data_DB(에이전시 소속 선수) 탭 데이터를 구글 Apps Script에서 fetch
+  // 1. 초기 데이터 로드: 메인 대시보드가 처음 렌더링될 때 App_data_DB(에이전시 소속 선수) 탭 데이터를 백엔드 프록시를 통해 fetch
   useEffect(() => {
     const fetchDashboardPlayers = async () => {
       try {
-        const timestamp = new Date().getTime();
-        // 쿼리 파라미터로 sheetName=App_data_DB 및 type=agency 명시
-        const fetchUrl = `${GAS_DB_URL}?sheetName=App_data_DB&type=agency&t=${timestamp}`;
-        const response = await fetch(fetchUrl);
-
-        if (!response.ok) {
-          throw new Error(`DB 통신 오류 (HTTP ${response.status})`);
-        }
-
-        const data = await response.json();
-        console.log('대시보드 데이터 로드 성공:', data);
-
-        // 방어 로직: 데이터 구조가 배열이 아니라면 안전하게 배열로 매핑
-        let rawList: any[] = [];
-        if (Array.isArray(data)) {
-          rawList = data;
-        } else if (Array.isArray(data?.data)) {
-          rawList = data.data;
-        } else if (Array.isArray(data?.players)) {
-          rawList = data.players;
-        } else if (Array.isArray(data?.records)) {
-          rawList = data.records;
-        } else if (Array.isArray(data?.items)) {
-          rawList = data.items;
-        } else if (Array.isArray(data?.result)) {
-          rawList = data.result;
-        } else if (data && typeof data === "object") {
-          const values = Object.values(data);
-          if (values.length > 0 && typeof values[0] === "object") {
-            rawList = values as any[];
-          }
-        }
-
-        // 객체 배열을 Player 인터페이스 규격으로 변환
-        const mappedPlayers = rawList
-          .map((item, idx) => mapRawToPlayer(item, idx))
-          .filter((p): p is Player => p !== null);
+        const mappedPlayers = await fetchAppDataFromDatabase();
+        console.log('대시보드 데이터 로드 성공 (총 ' + mappedPlayers.length + '명):', mappedPlayers);
 
         if (mappedPlayers.length > 0) {
           // 구글 시트 마스터 DB에서 최신 구단 로스터를 조회하여 입단 연도 및 등록일수 실시간 보강
@@ -445,27 +286,27 @@ export default function Home() {
     setIsDeletingPlayer(true);
 
     try {
-      // 1) 구글 스프레드시트 App_data_DB에서 해당 선수 영구 삭제 요청
+      // 1) 구글 스프레드시트 App_data_DB에서 해당 선수 영구 삭제 요청 (action: 'delete_sample'을 통해 기존 행 완벽 삭제)
       const delRes = await deletePlayerFromDatabase({
         id: target.id,
         name: target.name,
         team: target.team,
       });
 
-      // 2) 로컬 상태 및 localStorage에서 제거
-      const updated = players.filter((p) => p.id !== target.id);
+      // 2) 로컬 상태 및 localStorage에서 완전 제거 (ID 및 이름 기준 중복 방지)
+      const updated = players.filter((p) => p.id !== target.id && p.name.trim() !== target.name.trim());
       setPlayers(updated);
       saveStoredPlayers(updated);
 
       if (delRes.remoteDeleted || delRes.success) {
-        showToast(`'${target.name}' 선수가 App_data_DB 데이터베이스 및 소속 명단에서 완전히 삭제되었습니다.`);
+        showToast(`'${target.name}' 선수가 App_data_DB 데이터베이스 및 소속 명단에서 성공적으로 영구 삭제되었습니다.`);
       } else {
         showToast(`'${target.name}' 선수가 소속 명단에서 삭제되었습니다.`);
       }
     } catch (err: any) {
       console.error("DB 선수 삭제 오류:", err);
       // 오류 발생 시에도 로컬 상태는 삭제 반영
-      const updated = players.filter((p) => p.id !== target.id);
+      const updated = players.filter((p) => p.id !== target.id && p.name.trim() !== target.name.trim());
       setPlayers(updated);
       saveStoredPlayers(updated);
       showToast(`'${target.name}' 선수가 소속 명단에서 삭제되었습니다.`);
@@ -479,63 +320,61 @@ export default function Home() {
   const handleSyncSinglePlayer = async (player: Player) => {
     setSyncingPlayerId(player.id);
     try {
-      // 1) App_data_DB (에이전시 DB)에서 최신 등록 정보 조회
-      let appDataPlayer: Player | null = null;
+      console.log(`[handleSyncSinglePlayer] '${player.name}'(${player.team}) DB 동기화 및 덮어쓰기 시작`);
+
+      // 1) Stat_Master_DB 및 구단 로스터에서 최신 KBO 통계 기록 조회
+      let dbResult: any = null;
       try {
-        const timestamp = new Date().getTime();
-        const appDataUrl = `${GAS_DB_URL}?sheetName=App_data_DB&type=agency&t=${timestamp}`;
-        const appRes = await fetch(appDataUrl);
-        if (appRes.ok) {
-          const appJson = await appRes.json();
-          const list: any[] = Array.isArray(appJson) ? appJson : (appJson?.data || appJson?.players || appJson?.records || []);
-          const rawMatch = list.find((item: any) => {
-            const iName = String(item["선수명"] || item.name || item.이름 || "").trim();
-            return iName === player.name.trim();
-          });
-          if (rawMatch) {
-            appDataPlayer = mapRawToPlayer(rawMatch, 0);
-          }
-        }
-      } catch (err) {
-        console.warn("App_data_DB fetch error during single sync:", err);
+        dbResult = await fetchPlayerFromDatabase(player.name, player.team);
+      } catch (statErr) {
+        console.warn("fetchPlayerFromDatabase error:", statErr);
       }
 
-      // 2) Stat_Master_DB 및 구단 로스터에서 연도별 상세 기록 조회
-      const dbResult = await fetchPlayerFromDatabase(player.name, player.team);
-      const baseToUse = appDataPlayer || player;
+      // 2) KBO 공식 통계가 조회된 경우 최신 지표(투수: ERA, WHIP, 승/홀/세, WAR 등 / 타자: 타율, OPS, 홈런, WAR 등) 갱신
+      //    단, 사용자가 설정한 계약기간, 에이전트, 현재 연봉 및 기존 입력 수치는 절대 유실되지 않도록 엄격히 보존
+      let finalPlayerToSave: Player = { ...player };
+      let kboStatUpdated = false;
 
-      let finalPlayerToSave: Player | null = null;
-
-      if (dbResult.success && dbResult.records.length > 0) {
-        const converted = convertDbToPlayer(dbResult, baseToUse);
+      if (dbResult && dbResult.success && dbResult.records && dbResult.records.length > 0) {
+        const converted = convertDbToPlayer(dbResult, player);
         if (converted) {
-          finalPlayerToSave = { ...converted, id: player.id };
+          finalPlayerToSave = {
+            ...converted,
+            id: player.id,
+            contractPeriod: (player.contractPeriod && player.contractPeriod !== "-") ? player.contractPeriod : converted.contractPeriod,
+            agent: (player.agent && player.agent !== "미지정" && player.agent !== "미정") ? player.agent : converted.agent,
+            salaryCurrent: player.salaryCurrent > 0 ? player.salaryCurrent : converted.salaryCurrent,
+          };
+          kboStatUpdated = true;
         }
-      } else if (appDataPlayer) {
-        finalPlayerToSave = { ...player, ...appDataPlayer, id: player.id };
       }
 
-      if (finalPlayerToSave) {
-        // 프론트엔드 상태 및 로컬 스토리지 즉시 반영
-        const updated = players.map((p) => (p.id === player.id ? finalPlayerToSave! : p));
-        setPlayers(updated);
-        saveStoredPlayers(updated);
+      // 3) 프론트엔드 상태 및 로컬 스토리지 즉시 반영
+      const updated = players.map((p) => (p.id === player.id ? finalPlayerToSave : p));
+      setPlayers(updated);
+      saveStoredPlayers(updated);
 
-        // 구글 시트 App_data_DB에 변경된 최신 정보 자동 덮어쓰기 저장 (백엔드 프록시 연동, action: 'update')
-        const dbPayload = convertPlayerToAppDbPayload(finalPlayerToSave, "update");
-        const saveResult = await savePlayerToDatabase(dbPayload);
+      // 4) 구글 시트 App_data_DB에 최신 정보 자동 덮어쓰기 저장 (백엔드 프록시 연동, force: true, action: 'update')
+      const dbPayload = convertPlayerToAppDbPayload(finalPlayerToSave, "update");
+      console.log(`[handleSyncSinglePlayer] '${player.name}' App_data_DB 전송 페이로드:`, dbPayload);
 
-        if (saveResult.success) {
-          showToast(`'${player.name}' 선수의 최신 성적 및 연봉 정보가 App_data_DB에 자동 덮어쓰기 저장되었습니다.`);
+      const saveResult = await savePlayerToDatabase({
+        ...dbPayload,
+        force: true,
+      });
+
+      if (saveResult.remoteSaved || saveResult.success) {
+        if (kboStatUpdated) {
+          showToast(`'${player.name}' 선수의 최신 KBO 공식 기록 갱신 및 App_data_DB 덮어쓰기 저장이 완료되었습니다.`);
         } else {
-          showToast(`'${player.name}' 선수의 정보가 로컬에 갱신되었습니다.`);
+          showToast(`'${player.name}' 선수의 정보가 데이터베이스(App_data_DB)에 성공적으로 덮어쓰기 저장되었습니다.`);
         }
-        return;
+      } else {
+        showToast(`'${player.name}' 선수의 정보가 로컬에 갱신되었습니다.`);
       }
-
-      showToast(`구글 DB에서 '${player.name}' 선수의 기록을 찾지 못했습니다.`);
     } catch (e: any) {
-      showToast(`동기화 오류: ${e.message}`);
+      console.error("Single sync error:", e);
+      showToast(`동기화 오류: ${e.message || "데이터베이스 처리 실패"}`);
     } finally {
       setSyncingPlayerId(null);
     }
@@ -553,20 +392,10 @@ export default function Home() {
       // 1) App_data_DB (에이전시 소속 선수 DB) 최신 데이터 일괄 fetch
       const appDataMap = new Map<string, Player>();
       try {
-        const timestamp = new Date().getTime();
-        const appDataUrl = `${GAS_DB_URL}?sheetName=App_data_DB&type=agency&t=${timestamp}`;
-        const appRes = await fetch(appDataUrl);
-        if (appRes.ok) {
-          const appJson = await appRes.json();
-          const list: any[] = Array.isArray(appJson) ? appJson : (appJson?.data || appJson?.players || appJson?.records || []);
-          list.forEach((item, idx) => {
-            const iName = String(item["선수명"] || item.name || item.이름 || "").trim();
-            if (iName) {
-              const mapped = mapRawToPlayer(item, idx);
-              if (mapped) appDataMap.set(iName, mapped);
-            }
-          });
-        }
+        const allAppData = await fetchAppDataFromDatabase();
+        allAppData.forEach((p) => {
+          if (p.name) appDataMap.set(p.name.trim(), p);
+        });
       } catch (err) {
         console.warn("App_data_DB batch sync warning:", err);
       }
@@ -578,14 +407,20 @@ export default function Home() {
         const pName = p.name.trim();
         setBatchSyncProgress(`기록 조회 중... (${i + 1}/${updatedList.length} ${pName})`);
         const appPlayer = appDataMap.get(pName);
-        const basePlayer = appPlayer ? { ...p, ...appPlayer, id: p.id } : p;
+        const basePlayer = appPlayer ? { ...appPlayer, ...p, id: p.id } : p;
 
         // Stat_Master_DB / 구단 로스터에서 연도별 기록 동기화
         const res = await fetchPlayerFromDatabase(p.name, p.team);
         if (res.success && res.records.length > 0) {
           const conv = convertDbToPlayer(res, basePlayer);
           if (conv) {
-            updatedList[i] = { ...conv, id: p.id };
+            updatedList[i] = {
+              ...conv,
+              id: p.id,
+              contractPeriod: (p.contractPeriod && p.contractPeriod !== "-") ? p.contractPeriod : conv.contractPeriod,
+              agent: (p.agent && p.agent !== "미지정" && p.agent !== "미정") ? p.agent : conv.agent,
+              salaryCurrent: p.salaryCurrent > 0 ? p.salaryCurrent : conv.salaryCurrent,
+            };
             updatedCount++;
             continue;
           }
@@ -609,7 +444,7 @@ export default function Home() {
         
         try {
           const payload = convertPlayerToAppDbPayload(p, "update");
-          const saveRes = await savePlayerToDatabase(payload);
+          const saveRes = await savePlayerToDatabase({ ...payload, force: true });
           if (saveRes.success) {
             savedDbCount++;
           }

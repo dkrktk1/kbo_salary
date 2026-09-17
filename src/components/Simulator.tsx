@@ -18,8 +18,14 @@ import {
   extractWhipFromObject,
   getValue,
   parsePlayerSalary,
+  parsePlayerSalaryToManwon,
   parsePlayerCsPercent,
-  DbRawPlayerRecord
+  DbRawPlayerRecord,
+  GAS_DB_URL,
+  convertPlayerToAppDbPayload,
+  savePlayerToDatabase,
+  mapRawToPlayer,
+  fetchAppDataFromDatabase
 } from "../services/dbService";
 import {
   Calculator,
@@ -47,7 +53,10 @@ import {
   SlidersHorizontal,
   History,
   Copy,
-  Save
+  Save,
+  RefreshCw,
+  UserPlus,
+  DollarSign
 } from "lucide-react";
 import SamplePlayerModal from "./SamplePlayerModal";
 import StatInputSlider from "./StatInputSlider";
@@ -217,6 +226,84 @@ export function formatKoreanSalary(amountWon: number): string {
   return "0원";
 }
 
+interface BaselineSalaryInputProps {
+  year?: number | null;
+  isSample: boolean;
+  value: string;
+  onChange: (val: string) => void;
+  salaryWon: number;
+  isLoading?: boolean;
+}
+
+function BaselineSalaryInput({
+  year,
+  isSample,
+  value,
+  onChange,
+  salaryWon,
+  isLoading
+}: BaselineSalaryInputProps) {
+  return (
+    <div className="bg-gradient-to-r from-amber-500/10 via-gold/10 to-transparent p-2.5 sm:p-3 rounded-xl border border-gold/30 flex flex-col gap-2 shadow-sm">
+      {/* 1행: 라벨 및 현재 기준 연봉 (1줄로 표시, 좁을 시 깔끔하게 줄바꿈) */}
+      <div className="flex items-center justify-between gap-1.5 flex-wrap">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <DollarSign className="w-3.5 h-3.5 text-gold shrink-0" />
+          <span className="text-xs font-bold text-white whitespace-nowrap">
+            기준 연봉 {!isSample && year ? `(${year}년)` : !isSample ? "(연도 미선택)" : ""}
+          </span>
+          <span className="text-[10px] text-gold/70 font-normal whitespace-nowrap">
+            (수정 가능)
+          </span>
+        </div>
+        <div className="shrink-0 text-right ml-auto">
+          {salaryWon > 0 ? (
+            <span className="text-xs font-mono font-bold text-gold whitespace-nowrap">
+              {formatKoreanSalary(salaryWon)}
+            </span>
+          ) : (
+            <span className="text-[10px] text-amber-300 font-medium bg-amber-500/15 px-1.5 py-0.5 rounded border border-amber-500/25 whitespace-nowrap">
+              {year ? "직접 입력 필요" : "0원 (연도 미선택)"}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* 2행: 수기 입력창 */}
+      <div className="relative flex items-center">
+        <input
+          type="text"
+          inputMode="numeric"
+          value={value}
+          onChange={(e) => {
+            const clean = e.target.value.replace(/[^0-9,]/g, "");
+            onChange(clean);
+          }}
+          placeholder={isLoading ? "DB 연봉 조회 중..." : year ? "만원 단위 입력 (예: 9500)" : "연도 선택 후 자동 로드 또는 직접 입력"}
+          className="w-full bg-black/60 border border-white/20 focus:border-gold rounded-lg px-2.5 py-1.5 pr-11 text-white text-xs font-mono font-bold outline-none transition-all placeholder:text-gray-500 shadow-inner"
+        />
+        <span className="absolute right-2.5 text-xs text-gold font-bold pointer-events-none whitespace-nowrap">
+          만원
+        </span>
+      </div>
+
+      {/* 3행: 하단 상태 안내 문구 (1줄로 표시, 좁을 시 깔끔하게 줄바꿈) */}
+      <div className="flex items-center justify-between gap-1 text-[10px] text-gray-400 px-0.5 flex-wrap">
+        <span className="whitespace-nowrap">
+          {salaryWon > 0
+            ? `${salaryWon.toLocaleString()}원 기준`
+            : "기준 연봉 직접 입력"}
+        </span>
+        {!isSample && (
+          <span className={`whitespace-nowrap ${salaryWon > 0 ? "text-emerald-400 font-medium" : "text-amber-400/80"}`}>
+            {salaryWon > 0 ? "✓ 기준 연봉 적용" : year ? "DB 연봉 없음 (직접 입력)" : "연도 선택 시 DB 연봉 자동 로드"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Simulator() {
   const [storedPlayers, setStoredPlayers] = useState<Player[]>(loadStoredPlayers);
   const [samplePlayers, setSamplePlayers] = useState<Player[]>(loadSamplePlayers);
@@ -229,12 +316,122 @@ export default function Simulator() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchNotice, setSearchNotice] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
+  // [신규] 전체 DB 일괄 동기화 상태 (타자 및 투수 전체 덮어쓰기 지원)
+  const [isBatchSyncing, setIsBatchSyncing] = useState(false);
+  const [batchSyncProgress, setBatchSyncProgress] = useState("");
+
   // 현재 선택된 대상 선수 (Player 객체) - 초기 진입 시 빈칸 및 0원 상태로 대기
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
 
   // 샘플 선수 삭제 확인 모달 State
   const [deleteConfirmPlayer, setDeleteConfirmPlayer] = useState<Player | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // [신규] 전체 DB 일괄 동기화 (App_data_DB 및 KBO 최신 성적 조회 -> 타자/투수 덮어쓰기 저장)
+  const handleSyncAllPlayers = async () => {
+    const currentList = loadStoredPlayers();
+    if (currentList.length === 0) {
+      setSearchNotice({
+        type: "error",
+        message: "동기화할 등록된 소속 선수가 없습니다."
+      });
+      return;
+    }
+
+    setIsBatchSyncing(true);
+    setBatchSyncProgress("최신 DB 기록 조회 중...");
+    let updatedCount = 0;
+    let savedDbCount = 0;
+
+    try {
+      // 1) App_data_DB (에이전시 소속 선수 DB) 최신 데이터 일괄 fetch
+      const appDataMap = new Map<string, Player>();
+      try {
+        const allAppData = await fetchAppDataFromDatabase();
+        allAppData.forEach((p) => {
+          if (p.name) appDataMap.set(p.name.trim(), p);
+        });
+      } catch (err) {
+        console.warn("App_data_DB batch sync warning:", err);
+      }
+
+      // 2) 전체 소속 선수에 대해 최신 KBO 통계 기록 조회 및 로컬 리스트 갱신 (타자 및 투수 모두 완벽 지원)
+      const updatedList = [...currentList];
+      for (let i = 0; i < updatedList.length; i++) {
+        const p = updatedList[i];
+        const pName = p.name.trim();
+        setBatchSyncProgress(`기록 조회 중... (${i + 1}/${updatedList.length} ${pName})`);
+        const appPlayer = appDataMap.get(pName);
+        const basePlayer = appPlayer ? { ...p, ...appPlayer, id: p.id } : p;
+
+        // Stat_Master_DB / 구단 로스터에서 연도별 기록 동기화
+        const res = await fetchPlayerFromDatabase(p.name, p.team);
+        if (res.success && res.records.length > 0) {
+          const conv = convertDbToPlayer(res, basePlayer);
+          if (conv) {
+            updatedList[i] = { ...conv, id: p.id };
+            updatedCount++;
+            continue;
+          }
+        }
+
+        if (appPlayer) {
+          updatedList[i] = basePlayer;
+          updatedCount++;
+        }
+      }
+
+      // 로컬 상태 및 localStorage 즉시 업데이트
+      setStoredPlayers(updatedList);
+      saveStoredPlayers(updatedList);
+
+      // 현재 선택된 선수가 있으면 선택된 선수도 최신 정보로 갱신
+      if (selectedPlayer) {
+        const updatedSelected = updatedList.find(p => p.id === selectedPlayer.id || (p.name === selectedPlayer.name && p.team === selectedPlayer.team));
+        if (updatedSelected) {
+          setSelectedPlayer(updatedSelected);
+          fetchPlayerFromDatabase(updatedSelected.name, updatedSelected.team)
+            .then(res => {
+              if (res.success && res.records) setPlayerDbRecords(res.records);
+            })
+            .catch(() => {});
+        }
+      }
+
+      // 3) 갱신된 모든 선수 정보를 구글 시트 App_data_DB에 순차적으로 자동 덮어쓰기 저장 (투수 스탯 ERA, WHIP, 승/홀/세 등 온전히 포함)
+      for (let i = 0; i < updatedList.length; i++) {
+        const p = updatedList[i];
+        setBatchSyncProgress(`App_data_DB 저장 중... (${i + 1}/${updatedList.length} ${p.name})`);
+        
+        try {
+          const payload = convertPlayerToAppDbPayload(p, "update");
+          const saveRes = await savePlayerToDatabase({ ...payload, force: true });
+          if (saveRes.success) {
+            savedDbCount++;
+          }
+        } catch (saveErr) {
+          console.warn(`[Simulator.handleSyncAllPlayers] '${p.name}' DB 저장 경고:`, saveErr);
+        }
+
+        if (i < updatedList.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+
+      setSearchNotice({
+        type: "success",
+        message: `전체 ${currentList.length}명 중 ${updatedCount}명의 최신 기록(타자 및 투수)이 동기화되고, ${savedDbCount}명이 App_data_DB에 성공적으로 자동 덮어쓰기 저장되었습니다.`
+      });
+    } catch (e: any) {
+      setSearchNotice({
+        type: "error",
+        message: `일괄 동기화 중 오류가 발생했습니다: ${e.message}`
+      });
+    } finally {
+      setIsBatchSyncing(false);
+      setBatchSyncProgress("");
+    }
+  };
 
   // [신규] 좌측 기준 지표 및 DB 레코드 상태 관리
   const [playerDbRecords, setPlayerDbRecords] = useState<DbRawPlayerRecord[]>([]);
@@ -580,46 +777,43 @@ export default function Simulator() {
   }
   const currentSalaryWon = !selectedPlayer ? 0 : (rawSalary < 5000000 ? rawSalary * 10000 : rawSalary);
 
-  // [상태 관리]: 선택된 선수가 변경될 때 슬라이더 값들을 해당 포지션의 기본값으로 초기화
+  // [기준 지표 연봉 수동 입력 및 동기화 상태]
+  // 사용자가 직접 기준 연봉을 만원 단위로 수정할 수 있으며, 연도 변경 시 DB 연봉으로 재동기화됨
+  const [manualBaselineSalaryText, setManualBaselineSalaryText] = useState<string>("");
+
+  const manualBaselineSalaryWon = useMemo(() => {
+    if (!manualBaselineSalaryText || manualBaselineSalaryText.trim() === "") return 0;
+    return parsePlayerSalary(manualBaselineSalaryText);
+  }, [manualBaselineSalaryText]);
+
+  // 최종 기준 연봉(원 단위): 입력칸의 값이 우선 반영되며, 비어있으면 0원
+  const effectiveBaselineSalaryWon = manualBaselineSalaryWon;
+
+  // [상태 관리]: 선택된 선수가 변경될 때 연도를 선택하기 전까지 모든 지표를 0으로 초기화
   useEffect(() => {
     if (!selectedPlayer) return;
     // 샘플 선수는 전용 지표 세팅 효과에서 관리하므로 일반 초기화 건너뜀
     if (isSamplePlayer) return;
-    const cat = classifyPosition(selectedPlayer.position);
 
-    // 선수의 최근 시즌 WAR가 있으면 참고하여 목표 WAR 디폴트 설정 (기본값 4.5)
-    const latestWar = selectedPlayer.stats?.[selectedPlayer.stats.length - 1]?.war;
-    if (typeof latestWar === 'number' && !isNaN(latestWar)) {
-      if (latestWar < 0) {
-        setTargetWar(parseFloat(Math.max(-0.5, Math.min(10, latestWar)).toFixed(2)));
-      } else {
-        setTargetWar(parseFloat(Math.min(10, Math.max(1.0, latestWar * 1.15)).toFixed(2)));
-      }
-    } else {
-      setTargetWar(DEFAULT_WAR);
-    }
+    // [요구사항]: 연도를 선택하기 전까지는 기준 지표 및 비교 지표의 모든 값을 0으로 표시
+    setBaselineYear(null);
+    setComparisonYear(null);
+    setManualBaselineSalaryText("");
 
-    if (cat === 'PITCHER') {
-      setPitcherInnings(DEFAULT_PITCHER_STATS.innings);
-      setPitcherEra(DEFAULT_PITCHER_STATS.era);
-      setPitcherWhip(DEFAULT_PITCHER_STATS.whip);
-    } else {
-      // 타자(포수, 내/외야수) 공통 타격 지표 초기화
-      setHitterWrcPlus(DEFAULT_HITTER_STATS.wrcPlus);
-      setHitterOps(DEFAULT_HITTER_STATS.ops);
-
-      if (cat === 'CATCHER') {
-        setCatcherCsRate(DEFAULT_CATCHER_PREMIUM.csRate);
-        setCatcherPb9(DEFAULT_CATCHER_PREMIUM.pb9);
-      } else {
-        setFielderRf9(DEFAULT_FIELDER_PREMIUM.rf9);
-        setFielderIso(DEFAULT_FIELDER_PREMIUM.iso);
-      }
-    }
+    setTargetWar(0);
+    setPitcherInnings(0);
+    setPitcherEra(0);
+    setPitcherWhip(0);
+    setHitterWrcPlus(0);
+    setHitterOps(0);
+    setCatcherCsRate(0);
+    setCatcherPb9(0);
+    setFielderRf9(0);
+    setFielderIso(0);
 
     // 선수 변경 시 기존 리포트 초기화
     setReport("");
-  }, [selectedPlayer?.id, selectedPlayer?.name, selectedPlayer?.position]);
+  }, [selectedPlayer?.id, selectedPlayer?.name, selectedPlayer?.position, isSamplePlayer]);
 
   // [신규] 선택된 선수가 변경되었을 때 데이터베이스에서 해당 선수의 전체 시즌 레코드(연도별 실적) 비동기 조회
   useEffect(() => {
@@ -688,22 +882,52 @@ export default function Simulator() {
     return Array.from(yearsSet).sort((a, b) => b - a);
   }, [playerDbRecords, selectedPlayer?.stats]);
 
-  // 사용 가능한 연도 목록이 갱신되었을 때 baselineYear 자동 보정
+  // 사용 가능한 연도 목록이 갱신되었을 때 이미 선택된 baselineYear가 유효하지 않은 경우만 보정 (null 미선택 상태는 자동 선택하지 않음)
   useEffect(() => {
-    if (availableYears.length > 0 && !availableYears.includes(baselineYear)) {
-      if (availableYears.includes(2025)) {
-        setBaselineYear(2025);
-      } else if (availableYears.includes(2024)) {
-        setBaselineYear(2024);
-      } else {
-        setBaselineYear(availableYears[0]);
-      }
+    if (baselineYear !== null && availableYears.length > 0 && !availableYears.includes(baselineYear)) {
+      setBaselineYear(availableYears[0] ?? null);
     }
   }, [availableYears, baselineYear]);
 
-  // [신규] 좌측 기준 지표 데이터 도출 (선택된 baselineYear 기준)
+  useEffect(() => {
+    if (comparisonYear !== null && availableYears.length > 0 && !availableYears.includes(comparisonYear)) {
+      setComparisonYear(availableYears[0] ?? null);
+    }
+  }, [availableYears, comparisonYear]);
+
+  // [신규] 기준 지표 연도 선택 시 해당 시즌의 DB 성적 및 연봉 불러오기
+  const handleSelectBaselineYear = (yr: number) => {
+    setBaselineYear(yr);
+    setIsYearDropdownOpen(false);
+  };
+
+  // [신규] 좌측 기준 지표 데이터 도출 (선택된 baselineYear 기준, 연도 선택 전까지는 0으로 표시)
   const baselineStats = useMemo(() => {
     if (!selectedPlayer) return null;
+
+    // [요구사항]: 연도를 선택하기 전까지는 기준 지표의 모든 값을 0으로 반환
+    if (!baselineYear) {
+      return {
+        year: null,
+        war: 0,
+        wrcPlus: 0,
+        ops: 0,
+        avg: 0,
+        hr: 0,
+        salaryWon: 0,
+        csRate: 0,
+        pb9: 0,
+        rf9: 0,
+        iso: 0,
+        innings: 0,
+        era: 0,
+        whip: 0,
+        wls: undefined,
+        games: 0,
+        pa: 0,
+        hasDbRecord: false
+      };
+    }
 
     const merged = mergeRawRecordsForYear(playerDbRecords, baselineYear, selectedPlayer.name);
     const pStat = selectedPlayer.stats?.find((s) => s.year === baselineYear);
@@ -715,13 +939,11 @@ export default function Simulator() {
     } else if (pStat?.war !== undefined && pStat?.war !== null) {
       war = pStat.war;
     } else {
-      // 최근 시즌 WAR 참고 또는 기본값
-      const latestWar = selectedPlayer.stats?.[selectedPlayer.stats.length - 1]?.war;
-      war = typeof latestWar === 'number' ? latestWar : 2.5;
+      war = 0;
     }
 
     // 2. OPS 추출
-    let ops = 0.750;
+    let ops = 0;
     if (merged) {
       const mOps = extractOpsFromObject(merged);
       if (mOps !== undefined && mOps > 0) {
@@ -734,8 +956,8 @@ export default function Simulator() {
     }
 
     // 3. AVG 및 HR 보조 지표
-    let avg = pStat?.avg;
-    let hr = pStat?.hr;
+    let avg = pStat?.avg ?? 0;
+    let hr = pStat?.hr ?? 0;
     if (merged) {
       const mAvg = extractAvgFromObject(merged);
       if (mAvg !== undefined) avg = mAvg;
@@ -744,16 +966,16 @@ export default function Simulator() {
     }
 
     // 4. wRC+ 추출 (DB 레코드 또는 OPS 기반 추정)
-    let wrcPlus = 100;
+    let wrcPlus = 0;
     if (merged) {
       const rawWrc = getValue(merged, ["wRC+", "WRC+", "wrc+", "wRC", "WRC"]);
       if (rawWrc !== undefined && rawWrc !== null && rawWrc !== "" && rawWrc !== "-") {
         const parsedWrc = parseFloat(String(rawWrc));
         if (!isNaN(parsedWrc)) wrcPlus = Math.round(parsedWrc);
-      } else if (ops) {
+      } else if (ops > 0) {
         wrcPlus = Math.round((ops - 0.720) * 250 + 100);
       }
-    } else if (ops) {
+    } else if (ops > 0) {
       wrcPlus = Math.round((ops - 0.720) * 250 + 100);
     }
 
@@ -768,8 +990,8 @@ export default function Simulator() {
     }
 
     // 6. 포수 전용 지표 (CS%, PB/9)
-    let csRate = 30.0;
-    let pb9 = 0.38;
+    let csRate = 0;
+    let pb9 = 0;
     if (merged) {
       const rawCs = extractCsFromObject(merged) ?? getValue(merged, ["CS%", "cs%", "도루저지율"]);
       if (rawCs !== undefined) {
@@ -784,8 +1006,8 @@ export default function Simulator() {
     }
 
     // 7. 내/외야수 전용 지표 (RF9, ISO)
-    let rf9 = 3.85;
-    let iso = 0.165;
+    let rf9 = 0;
+    let iso = 0;
     if (merged) {
       const rawRf9 = getValue(merged, ["RF9", "rf9", "Rf9", "RF/9"]);
       if (rawRf9 !== undefined && rawRf9 !== "" && rawRf9 !== "-") {
@@ -797,16 +1019,16 @@ export default function Simulator() {
         const parsedIso = parseFloat(String(rawIso));
         if (!isNaN(parsedIso)) iso = parsedIso;
       } else if (ops && avg) {
-        iso = Math.max(0.05, parseFloat((ops - avg - 0.08).toFixed(3)));
+        iso = Math.max(0, parseFloat((ops - avg - 0.08).toFixed(3)));
       }
     } else if (ops && avg) {
-      iso = Math.max(0.05, parseFloat((ops - avg - 0.08).toFixed(3)));
+      iso = Math.max(0, parseFloat((ops - avg - 0.08).toFixed(3)));
     }
 
     // 8. 투수 전용 지표 (이닝, ERA, WHIP, 승패)
-    let innings = 135;
-    let era = 3.50;
-    let whip = 1.22;
+    let innings = 0;
+    let era = 0;
+    let whip = 0;
     let wls: string | undefined = undefined;
     if (merged) {
       const rawIp = getValue(merged, ["IP", "투수이닝", "투구이닝", "이닝", "innings"]);
@@ -979,6 +1201,7 @@ export default function Simulator() {
   }, [selectedPlayer?.id, isSamplePlayer, selectedPlayer]);
 
   // [신규] 유효 기준 지표: 일반 선수는 baselineStats, 샘플 선수는 수동 입력된 sampleBaseline 지표 사용
+  // 기준 연봉은 사용자가 직접 수정한 값(effectiveBaselineSalaryWon)이 최우선 반영됨
   const effectiveBaselineStats = useMemo(() => {
     if (isSamplePlayer) {
       return {
@@ -988,7 +1211,7 @@ export default function Simulator() {
         ops: sampleBaselineOps,
         avg: selectedPlayer?.stats?.[0]?.avg ?? 0.285,
         hr: selectedPlayer?.stats?.[0]?.hr ?? 15,
-        salaryWon: selectedPlayer?.salaryCurrent || 0,
+        salaryWon: effectiveBaselineSalaryWon,
         csRate: sampleBaselineCsRate,
         pb9: sampleBaselinePb9,
         rf9: sampleBaselineRf9,
@@ -1001,7 +1224,11 @@ export default function Simulator() {
         hasDbRecord: false,
       };
     }
-    return baselineStats;
+    if (!baselineStats) return null;
+    return {
+      ...baselineStats,
+      salaryWon: effectiveBaselineSalaryWon,
+    };
   }, [
     isSamplePlayer,
     sampleBaselineWar,
@@ -1015,8 +1242,51 @@ export default function Simulator() {
     sampleBaselineEra,
     sampleBaselineWhip,
     selectedPlayer,
+    effectiveBaselineSalaryWon,
     baselineStats,
   ]);
+
+  // [요구사항 1 & 2]: 연도 선택 시 연봉 정보가 DB에 있으면 그 정보를 그대로 가져오고, 없으면 빈칸으로 설정
+  useEffect(() => {
+    if (!selectedPlayer) {
+      setManualBaselineSalaryText("");
+      return;
+    }
+
+    if (isSamplePlayer) {
+      const sal = (selectedPlayer as any).sampleBaseline?.salaryWon || selectedPlayer.salaryCurrent || 0;
+      if (sal > 0) {
+        const manwon = parsePlayerSalaryToManwon(sal);
+        setManualBaselineSalaryText(manwon > 0 ? String(manwon) : "");
+      } else {
+        setManualBaselineSalaryText("");
+      }
+      return;
+    }
+
+    // 일반 선수: DB 레코드 또는 stats에서 선택된 baselineYear의 연봉 탐색
+    const merged = mergeRawRecordsForYear(playerDbRecords, baselineYear, selectedPlayer.name);
+    const pStat = selectedPlayer.stats?.find((s) => s.year === baselineYear);
+
+    let salWon = 0;
+    if (merged) {
+      const rawSal = getValue(merged, ["연봉", "현재 연봉", "현재연봉", "salary", "당해연봉", "시즌연봉", "금액"]);
+      if (rawSal !== undefined && rawSal !== null && rawSal !== "" && rawSal !== "-") {
+        salWon = parsePlayerSalary(rawSal);
+      }
+    }
+    if (!salWon && pStat?.salary) {
+      salWon = pStat.salary;
+    }
+
+    if (salWon > 0) {
+      const manwon = parsePlayerSalaryToManwon(salWon);
+      setManualBaselineSalaryText(manwon > 0 ? String(manwon) : "");
+    } else {
+      // 해당 연도에 DB 연봉 정보가 없으면 빈칸으로 설정
+      setManualBaselineSalaryText("");
+    }
+  }, [selectedPlayer?.id, selectedPlayer?.name, baselineYear, playerDbRecords, isSamplePlayer]);
 
   // [신규] 비교 지표 연도 선택 시 해당 시즌의 DB 성적 불러와 비교 슬라이더에 세팅
   const handleSelectComparisonYear = (yr: number) => {
@@ -1034,10 +1304,10 @@ export default function Simulator() {
     } else if (pStat?.war !== undefined && pStat?.war !== null) {
       war = pStat.war;
     } else {
-      war = 2.5;
+      war = 0;
     }
 
-    let ops = 0.750;
+    let ops = 0;
     if (merged) {
       const mOps = extractOpsFromObject(merged);
       if (mOps !== undefined && mOps > 0) ops = mOps;
@@ -1046,21 +1316,21 @@ export default function Simulator() {
       ops = pStat.ops;
     }
 
-    let wrcPlus = 100;
+    let wrcPlus = 0;
     if (merged) {
       const rawWrc = getValue(merged, ["wRC+", "WRC+", "wrc+", "wRC", "WRC"]);
       if (rawWrc !== undefined && rawWrc !== null && rawWrc !== "" && rawWrc !== "-") {
         const parsedWrc = parseFloat(String(rawWrc));
         if (!isNaN(parsedWrc)) wrcPlus = Math.round(parsedWrc);
-      } else if (ops) {
+      } else if (ops > 0) {
         wrcPlus = Math.round((ops - 0.720) * 250 + 100);
       }
-    } else if (ops) {
+    } else if (ops > 0) {
       wrcPlus = Math.round((ops - 0.720) * 250 + 100);
     }
 
-    let csRate = 30.0;
-    let pb9 = 0.38;
+    let csRate = 0;
+    let pb9 = 0;
     if (merged) {
       const rawCs = extractCsFromObject(merged) ?? getValue(merged, ["CS%", "cs%", "도루저지율"]);
       if (rawCs !== undefined) {
@@ -1074,8 +1344,8 @@ export default function Simulator() {
       }
     }
 
-    let rf9 = 3.85;
-    let iso = 0.165;
+    let rf9 = 0;
+    let iso = 0;
     if (merged) {
       const rawRf9 = getValue(merged, ["RF9", "rf9", "Rf9", "RF/9"]);
       if (rawRf9 !== undefined && rawRf9 !== "" && rawRf9 !== "-") {
@@ -1087,15 +1357,15 @@ export default function Simulator() {
         const parsedIso = parseFloat(String(rawIso));
         if (!isNaN(parsedIso)) iso = parsedIso;
       } else if (ops && pStat?.avg) {
-        iso = Math.max(0.05, parseFloat((ops - pStat.avg - 0.08).toFixed(3)));
+        iso = Math.max(0, parseFloat((ops - pStat.avg - 0.08).toFixed(3)));
       }
     }
 
     setTargetWar(Number(war.toFixed(2)));
     if (positionCategory === 'PITCHER') {
-      let innings = 135;
-      let era = 3.80;
-      let whip = 1.25;
+      let innings = 0;
+      let era = 0;
+      let whip = 0;
       if (merged) {
         const rawIp = getValue(merged, ["IP", "투수이닝", "투구이닝", "이닝"]);
         if (rawIp !== undefined && rawIp !== null && rawIp !== "" && rawIp !== "-") {
@@ -1106,6 +1376,9 @@ export default function Simulator() {
         if (mEra !== undefined) era = mEra;
         const mWhip = extractWhipFromObject(merged);
         if (mWhip !== undefined) whip = mWhip;
+      } else if (pStat) {
+        if (typeof pStat.era === "number") era = pStat.era;
+        if (typeof pStat.whip === "number") whip = pStat.whip;
       }
       setPitcherInnings(innings);
       setPitcherEra(era);
@@ -1666,13 +1939,47 @@ export default function Simulator() {
     return careerYears < 8;
   }, [selectedPlayer, serviceTimeInfo, careerYears]);
 
-  // 2. 포지션별 가치 모델링 기반 보너스 계산
-  let positionBonus = 0;
+  // 2. 포지션별 가치 모델링 기반 보너스 계산 (4대 정밀 고과/시장가치 알고리즘 적용)
+  const playerPositionStr = ((selectedPlayer?.position || "") + " " + ((selectedPlayer as any)?.positionDetail || "")).toLowerCase();
+  
+  // [알고리즘 2 판별]: 불펜 투수 (pitcherInnings <= 90 또는 세부 포지션에 구원/마무리/불펜/계투/셋업 포함)
+  const isReliefPitcher = positionCategory === 'PITCHER' && (
+    pitcherInnings <= 90 ||
+    playerPositionStr.includes("구원") ||
+    playerPositionStr.includes("마무리") ||
+    playerPositionStr.includes("불펜") ||
+    playerPositionStr.includes("중간") ||
+    playerPositionStr.includes("계투") ||
+    playerPositionStr.includes("셋업") ||
+    playerPositionStr.includes("relief") ||
+    playerPositionStr.includes("closer")
+  );
+
+  let rawPositionBonus = 0;
+  let volumeMultiplier = 1.0;
+
   if (positionCategory === 'PITCHER') {
-    const innBonus = (pitcherInnings - 100) * 2000000;
-    const eraBonus = (4.00 - pitcherEra) * 70000000;
-    const whipBonus = (1.30 - pitcherWhip) * 400000000;
-    positionBonus = innBonus + eraBonus + whipBonus;
+    if (isReliefPitcher) {
+      // [알고리즘 2]: 불펜 투수 전용 가중치 (Relief Pitcher Weighting)
+      // 기준점: ERA 3.50, WHIP 1.20 기준 (엄격한 기준 적용)
+      // 보너스 배수 1.5배 상향, 누적 이닝 패널티 면제 및 이닝당 가치 400만원 상향
+      const innBonus = Math.max(0, (pitcherInnings - 40) * 4000000);
+      const eraBonus = (3.50 - pitcherEra) * 70000000 * 1.5;
+      const whipBonus = (1.20 - pitcherWhip) * 400000000 * 1.5;
+      rawPositionBonus = innBonus + eraBonus + whipBonus;
+
+      // [알고리즘 1]: 불펜 투수 볼륨 가중치 (50이닝 기준 스몰 샘플 거품 방어)
+      volumeMultiplier = Math.min(1.0, pitcherInnings / 50);
+    } else {
+      // 선발 투수
+      const innBonus = (pitcherInnings - 100) * 2000000;
+      const eraBonus = (4.00 - pitcherEra) * 70000000;
+      const whipBonus = (1.30 - pitcherWhip) * 400000000;
+      rawPositionBonus = innBonus + eraBonus + whipBonus;
+
+      // [알고리즘 1]: 선발 투수 볼륨 가중치 (120이닝 기준 스몰 샘플 거품 방어)
+      volumeMultiplier = Math.min(1.0, pitcherInnings / 120);
+    }
   } else {
     // 모든 타자(포수, 내/외야수) 공통 타격 기여도
     const wrcBonus = (hitterWrcPlus - 100) * 5000000;
@@ -1689,99 +1996,132 @@ export default function Simulator() {
       const isoBonus = (fielderIso - 0.150) * 1200000000;
       premiumBonus = rf9Bonus + isoBonus;
     }
-    positionBonus = wrcBonus + opsBonus + premiumBonus;
+    rawPositionBonus = wrcBonus + opsBonus + premiumBonus;
+
+    // [알고리즘 1]: 타자 볼륨 가중치 (400타석 기준 스몰 샘플 거품 방어)
+    const batterPa = (effectiveBaselineStats?.pa && effectiveBaselineStats.pa > 0) ? effectiveBaselineStats.pa : 400;
+    volumeMultiplier = Math.min(1.0, batterPa / 400);
   }
 
-  // [트랙 1]: 데이터 기반 FA 환산 시장 가치 (WAR 1.0당 1.5억 ~ 2.0억원 + 핵심 포지션 가중치)
+  // 비율 스탯 볼륨 가중치 적용 최종 positionBonus
+  const positionBonus = rawPositionBonus * volumeMultiplier;
+
+  // [알고리즘 3]: 나이 대비 감가상각 곡선 (Aging Curve)
+  // 조건: selectedPlayer.age >= 32
+  // 로직: 31세를 초과하는 1년당 FA 환산 가치를 5%씩 삭감 (최대 30% 삭감 제한)
+  const playerAge = selectedPlayer?.age ?? 0;
+  const isAgingCurveApplied = Boolean(selectedPlayer && playerAge >= 32);
+  const ageMultiplier = isAgingCurveApplied ? Math.max(0.70, 1.0 - (playerAge - 31) * 0.05) : 1.0;
+
+  // [트랙 1]: 데이터 기반 FA 환산 시장 가치 (WAR 1.0당 1.5억 ~ 2.0억원 + 핵심 포지션 가중치 및 에이징 커브 적용)
   // 음수 WAR 입력 시에도 최저 연봉 3,000만원(KBO 규정) 하한 보장
-  const pureFaMin = Math.max(30000000, targetWar * 150000000 + positionBonus);
-  const pureFaMax = Math.max(pureFaMin, targetWar * 200000000 + positionBonus * 1.25);
+  const unadjustedFaMin = Math.max(30000000, targetWar * 150000000 + positionBonus);
+  const unadjustedFaMax = Math.max(unadjustedFaMin, targetWar * 200000000 + positionBonus * 1.25);
+  const pureFaMin = Math.max(30000000, Math.round(unadjustedFaMin * ageMultiplier));
+  const pureFaMax = Math.max(pureFaMin, Math.round(unadjustedFaMax * ageMultiplier));
+
+  // [핵심 로직 수정]: 예상 연봉 계산의 기준 연봉을 선수의 현재 연봉(currentSalaryWon)이 아니라 기준 지표에 있는 연봉(effectiveBaselineSalaryWon)으로 설정
+  const baselineBaseSalaryWon = effectiveBaselineSalaryWon;
 
   let minFaEstimate = 0;
   let maxFaEstimate = 0;
 
-  if (selectedPlayer) {
-    if (pureFaMin >= currentSalaryWon * 0.95) {
-      // 1) 순수 세이버메트릭스 시장 가치가 기존 연봉보다 높거나 저연봉 구간 선수
+  if (selectedPlayer && baselineYear) {
+    if (pureFaMin >= baselineBaseSalaryWon * 0.95) {
+      // 1) 순수 세이버메트릭스 시장 가치가 기준 연봉보다 높거나 저연봉 구간 선수
       minFaEstimate = pureFaMin;
       maxFaEstimate = pureFaMax;
     } else {
-      // 2) 양의지 선수처럼 기존 연봉(예: 42억원)이 순수 WAR 단순 계산치를 크게 상회하는 고액 연봉/기존 FA 스타:
-      // 기존 연봉을 베이스라인으로 유지하되, 목표 스탯(WAR 편차 및 포지션 프리미엄 보너스)의 가감을 실시간으로 연동
+      // 2) 기준 연봉(예: 42억원)이 순수 WAR 단순 계산치를 크게 상회하는 고액 연봉/기존 FA 스타:
+      // 기준 연봉을 베이스라인으로 유지하되, 목표 스탯(WAR 편차 및 포지션 프리미엄 보너스)의 가감을 실시간으로 연동 (에이징 커브 승수 적용)
       const warDelta = targetWar - 4.0;
-      const statAdjustmentMin = warDelta * 150000000 + positionBonus;
-      const statAdjustmentMax = warDelta * 200000000 + positionBonus * 1.25;
+      const statAdjustmentMin = (warDelta * 150000000 + positionBonus) * ageMultiplier;
+      const statAdjustmentMax = (warDelta * 200000000 + positionBonus * 1.25) * ageMultiplier;
 
-      minFaEstimate = Math.max(30000000, Math.max(currentSalaryWon * 0.60, currentSalaryWon * 0.95 + statAdjustmentMin));
-      maxFaEstimate = Math.max(minFaEstimate * 1.05, currentSalaryWon * 1.10 + statAdjustmentMax);
+      minFaEstimate = Math.max(30000000, Math.max(baselineBaseSalaryWon * 0.60, baselineBaseSalaryWon * 0.95 + statAdjustmentMin));
+      maxFaEstimate = Math.max(minFaEstimate * 1.05, baselineBaseSalaryWon * 1.10 + statAdjustmentMax);
     }
   }
 
-  const roundedMinFa = selectedPlayer ? Math.round(minFaEstimate / 5000000) * 5000000 : 0;
-  const roundedMaxFa = selectedPlayer ? Math.round(maxFaEstimate / 5000000) * 5000000 : 0;
+  const roundedMinFa = (selectedPlayer && baselineYear) ? Math.round(minFaEstimate / 5000000) * 5000000 : 0;
+  const roundedMaxFa = (selectedPlayer && baselineYear) ? Math.round(maxFaEstimate / 5000000) * 5000000 : 0;
 
-  // [트랙 2]: 현실적 협상 목표액 (비FA 구단 고과 인상/삭감 공식 적용)
+  // [알고리즘 4 판별]: 저연봉자 폭발적 인상 로직 (Breakout Multiplier)
+  // 조건: isNonFA === true 이고 currentSalaryWon(또는 기준연봉) <= 100000000 (1억 이하) 이며 targetWar >= 2.0 인 경우
+  const currentOrBaseSalaryWon = baselineBaseSalaryWon > 0 ? baselineBaseSalaryWon : currentSalaryWon;
+  const isBreakoutCandidate = Boolean(selectedPlayer && isNonFA && currentOrBaseSalaryWon <= 100000000 && targetWar >= 2.0);
+
+  // [트랙 2]: 현실적 협상 목표액 (비FA 구단 고과 인상/삭감 공식 및 폭발적 인상 로직 적용)
   let practicalBase = 0;
-  if (!selectedPlayer) {
+  if (!selectedPlayer || !baselineYear) {
     practicalBase = 0;
   } else if (isNonFA) {
-    // KBO 구단 고과 시뮬레이션 공식:
-    // 공식 1: 현재 연봉 + (현재 연봉 * (WAR * 0.2))
-    const salaryRateIncrease = currentSalaryWon * (targetWar * 0.20);
-    // 공식 2: 현재 연봉 + (WAR * 3,000만원)
-    const warDirectIncrease = targetWar * 30000000;
-
-    let practicalIncrease = 0;
-    if (targetWar >= 0) {
-      // 양수 WAR: 저연봉 구간 선수의 기여도 보호를 위해 둘 중 더 유리한 인상안 채택
-      practicalIncrease = Math.max(salaryRateIncrease, warDirectIncrease);
+    if (isBreakoutCandidate) {
+      // [알고리즘 4 적용]: KBO 고과 시뮬레이션의 기존 제한(20% 룰)을 무시하고,
+      // baselineBaseSalaryWon + (targetWar * 40000000) 공식을 '현실적 협상 목표액'에 다이렉트 적용 (WAR 1.0당 4천만 원 파격 인상 보장)
+      const breakoutDirectIncrease = targetWar * 40000000;
+      const scaledPosBonus = Math.max(-20000000, Math.min(30000000, positionBonus * 0.15));
+      practicalBase = Math.max(30000000, baselineBaseSalaryWon + breakoutDirectIncrease + scaledPosBonus);
     } else {
-      // 음수 WAR: 성적 부진 고과 삭감 시뮬레이션 (KBO 규약상 최대 -30% 한도 및 최저 연봉 보호)
-      practicalIncrease = Math.max(-currentSalaryWon * 0.30, Math.min(salaryRateIncrease, warDirectIncrease));
+      // 일반 KBO 구단 고과 시뮬레이션 공식 (기준 지표 연봉 기반 산출):
+      // 공식 1: 기준 연봉 + (기준 연봉 * (WAR * 0.2))
+      const salaryRateIncrease = baselineBaseSalaryWon * (targetWar * 0.20);
+      // 공식 2: 기준 연봉 + (WAR * 3,000만원)
+      const warDirectIncrease = targetWar * 30000000;
+
+      let practicalIncrease = 0;
+      if (targetWar >= 0) {
+        // 양수 WAR: 저연봉 구간 선수의 기여도 보호를 위해 둘 중 더 유리한 인상안 채택
+        practicalIncrease = Math.max(salaryRateIncrease, warDirectIncrease);
+      } else {
+        // 음수 WAR: 성적 부진 고과 삭감 시뮬레이션 (KBO 규약상 최대 -30% 한도 및 최저 연봉 보호)
+        practicalIncrease = Math.max(-baselineBaseSalaryWon * 0.30, Math.min(salaryRateIncrease, warDirectIncrease));
+      }
+
+      // 포지션 프리미엄을 비FA 고과 스케일에 맞게 온건하게 가산 (최대 ±3,000만원 제한)
+      const scaledPosBonus = Math.max(-20000000, Math.min(30000000, positionBonus * 0.15));
+
+      // 최저 3,000만원(KBO 규정) 하한선 보장
+      practicalBase = Math.max(30000000, baselineBaseSalaryWon + practicalIncrease + scaledPosBonus);
     }
-
-    // 포지션 프리미엄을 비FA 고과 스케일에 맞게 온건하게 가산 (최대 ±3,000만원 제한)
-    const scaledPosBonus = Math.max(-20000000, Math.min(30000000, positionBonus * 0.15));
-
-    // 최저 3,000만원(KBO 규정) 하한선 보장
-    practicalBase = Math.max(30000000, currentSalaryWon + practicalIncrease + scaledPosBonus);
   } else {
     // 1군 등록일수 요건을 충족한 FA 선수는 시장 가치가 곧 현실적 목표액
     practicalBase = (minFaEstimate + maxFaEstimate) / 2;
   }
 
   // 현실적 협상 목표액 범위 (Min ~ Max Range)
-  const minPracticalEstimate = !selectedPlayer
+  const minPracticalEstimate = (!selectedPlayer || !baselineYear)
     ? 0
     : isNonFA
     ? Math.max(30000000, Math.round((practicalBase * 0.90) / 5000000) * 5000000)
     : roundedMinFa;
-  const maxPracticalEstimate = !selectedPlayer
+  const maxPracticalEstimate = (!selectedPlayer || !baselineYear)
     ? 0
     : isNonFA
     ? Math.max(minPracticalEstimate, Math.round((practicalBase * 1.10) / 5000000) * 5000000)
     : roundedMaxFa;
 
-  const roundedMinPractical = selectedPlayer ? Math.round(minPracticalEstimate / 5000000) * 5000000 : 0;
-  const roundedMaxPractical = selectedPlayer ? Math.round(maxPracticalEstimate / 5000000) * 5000000 : 0;
+  const roundedMinPractical = (selectedPlayer && baselineYear) ? Math.round(minPracticalEstimate / 5000000) * 5000000 : 0;
+  const roundedMaxPractical = (selectedPlayer && baselineYear) ? Math.round(maxPracticalEstimate / 5000000) * 5000000 : 0;
 
-  // 현재 연봉 대비 현실적 목표액 인상/삭감폭 정밀 계산
-  // 1) 인상 국면: 최대 인상 타겟은 최고 예상액(roundedMaxPractical) - 현재 연봉
-  // 2) 삭감 국면: 최대 삭감 예상은 최저 예상액(roundedMinPractical)까지 떨어진 경우인 현재 연봉 - roundedMinPractical
-  const isPureIncrease = Boolean(selectedPlayer && roundedMinPractical > currentSalaryWon);
-  const isPureCut = Boolean(selectedPlayer && roundedMaxPractical < currentSalaryWon);
+  // 기준 지표 연봉 대비 현실적 목표액 인상/삭감폭 정밀 계산
+  // 1) 인상 국면: 최대 인상 타겟은 최고 예상액(roundedMaxPractical) - 기준 연봉
+  // 2) 삭감 국면: 최대 삭감 예상은 최저 예상액(roundedMinPractical)까지 떨어진 경우인 기준 연봉 - roundedMinPractical
+  const isPureIncrease = Boolean(selectedPlayer && baselineBaseSalaryWon > 0 && roundedMinPractical > baselineBaseSalaryWon);
+  const isPureCut = Boolean(selectedPlayer && baselineBaseSalaryWon > 0 && roundedMaxPractical < baselineBaseSalaryWon);
   const isMixed = Boolean(
     selectedPlayer &&
-    roundedMinPractical <= currentSalaryWon &&
-    currentSalaryWon <= roundedMaxPractical &&
+    baselineBaseSalaryWon > 0 &&
+    roundedMinPractical <= baselineBaseSalaryWon &&
+    baselineBaseSalaryWon <= roundedMaxPractical &&
     roundedMinPractical !== roundedMaxPractical
   );
 
-  const maxIncreaseWon = selectedPlayer ? Math.max(0, roundedMaxPractical - currentSalaryWon) : 0;
-  const maxIncreasePercent = (selectedPlayer && currentSalaryWon > 0) ? Math.round((maxIncreaseWon / currentSalaryWon) * 100) : 0;
+  const maxIncreaseWon = (selectedPlayer && baselineBaseSalaryWon > 0) ? Math.max(0, roundedMaxPractical - baselineBaseSalaryWon) : 0;
+  const maxIncreasePercent = (selectedPlayer && baselineBaseSalaryWon > 0) ? Math.round((maxIncreaseWon / baselineBaseSalaryWon) * 100) : 0;
 
-  const maxCutWon = selectedPlayer ? Math.max(0, currentSalaryWon - roundedMinPractical) : 0;
-  const maxCutPercent = (selectedPlayer && currentSalaryWon > 0) ? Math.round((maxCutWon / currentSalaryWon) * 100) : 0;
+  const maxCutWon = (selectedPlayer && baselineBaseSalaryWon > 0) ? Math.max(0, baselineBaseSalaryWon - roundedMinPractical) : 0;
+  const maxCutPercent = (selectedPlayer && baselineBaseSalaryWon > 0) ? Math.round((maxCutWon / baselineBaseSalaryWon) * 100) : 0;
 
   async function runSimulation() {
     if (!selectedPlayer) return;
@@ -1792,11 +2132,12 @@ export default function Simulator() {
         targetStats = {
           대분류: '투수',
           세부포지션: selectedPlayer.position,
+          불펜여부: isReliefPitcher ? "구원/마무리/불펜" : "선발",
           목표WAR: targetWar,
           투구이닝_IP: pitcherInnings,
           평균자책점_ERA: pitcherEra.toFixed(2),
           WHIP: pitcherWhip.toFixed(2),
-          지표특이사항: "ERA와 WHIP는 수치가 낮을수록 리그 최상위 경기 억제력을 의미함"
+          지표특이사항: isReliefPitcher ? "불펜 전용 가중치(ERA 3.50, WHIP 1.20 기준 1.5배 및 이닝 패널티 면제) 적용" : "ERA와 WHIP는 수치가 낮을수록 리그 최상위 경기 억제력을 의미함"
         };
       } else if (positionCategory === 'CATCHER') {
         targetStats = {
@@ -1819,6 +2160,29 @@ export default function Simulator() {
           포지션프리미엄_순수장타율_ISO: fielderIso.toFixed(3)
         };
       }
+
+      const algorithmDetails = {
+        volumeMultiplier: {
+          value: Number(volumeMultiplier.toFixed(2)),
+          applied: volumeMultiplier < 0.999,
+          type: positionCategory === 'PITCHER' ? (isReliefPitcher ? "불펜 (50이닝 기준)" : "선발 (120이닝 기준)") : "타자 (400타석 기준)",
+          sampleValue: positionCategory === 'PITCHER' ? `${pitcherInnings}이닝` : `${effectiveBaselineStats?.pa ?? 400}타석`
+        },
+        reliefWeighting: {
+          isRelief: isReliefPitcher,
+          applied: isReliefPitcher
+        },
+        agingCurve: {
+          applied: isAgingCurveApplied,
+          age: playerAge,
+          multiplier: Number(ageMultiplier.toFixed(2)),
+          discountPercent: Math.round((1 - ageMultiplier) * 100)
+        },
+        breakoutMultiplier: {
+          applied: isBreakoutCandidate,
+          rule: "1억원 이하 저연봉자 대상 WAR 2.0+ 달성 시 20% 인상률 캡 해제 및 WAR당 4,000만원 다이렉트 고과 산출"
+        }
+      };
       
       const res = await fetch("/api/gemini/simulator", {
         method: "POST",
@@ -1829,7 +2193,8 @@ export default function Simulator() {
             draftYearDisplay: draftInfo.display,
             careerYears: `${careerYears}년차`,
             isNonFA: isNonFA ? "비FA" : "FA 대상",
-            formattedCurrentSalary: formatKoreanSalary(currentSalaryWon)
+            formattedCurrentSalary: formatKoreanSalary(currentSalaryWon),
+            formattedBaselineSalary: formatKoreanSalary(baselineBaseSalaryWon)
           }, 
           targetStats,
           practicalTargetRange: {
@@ -1846,7 +2211,8 @@ export default function Simulator() {
             seasons: serviceTimeInfo.seasons,
             totalDays: serviceTimeInfo.totalDays,
             statusLabel: isNonFA ? "비FA (등록일수 미달)" : "FA 자격 충족"
-          }
+          },
+          algorithmDetails
         })
       });
       const data = await res.json();
@@ -1857,10 +2223,24 @@ export default function Simulator() {
       }
     } catch (e: any) {
       setTimeout(() => {
-        setReport(`• **💎 데이터 기반 FA 시장 가치 (Market Value)**: 목표 WAR ${targetWar.toFixed(2)} 달성 시 선수의 순수 세이버메트릭스 시장 가치는 **${formatKoreanSalary(roundedMinFa)} ~ ${formatKoreanSalary(roundedMaxFa)}** (1 WAR당 1.5억~2.0억원 및 포지션 가중치) 수준에 이릅니다.
-• **🎯 현실적 협상 목표액 (${isNonFA ? "등록일수 미달 비FA 고과 앵커링" : "FA 자격 기준 타겟"})**: 선수의 데이터 기반 실제 시장 가치는 ${formatKoreanSalary(roundedMaxFa)} 수준이나, ${isNonFA ? `현재 1군 등록일수(${serviceTimeInfo.display})가 KBO 규약상 FA 자격 취득 요건(정규 7~8시즌)에 미달하는 점과 구단의 연봉 고과 산정 시스템을 존중하여, 전략적으로 **${formatKoreanSalary(roundedMinPractical)} ~ ${formatKoreanSalary(roundedMaxPractical)}**을 현실적 협상 목표액으로 제시합니다.` : `1군 등록일수 요건을 충족한 FA 지위로서 **${formatKoreanSalary(roundedMinPractical)} ~ ${formatKoreanSalary(roundedMaxPractical)}**을 정당한 협상 목표액으로 요구합니다.`}
+        const algorithmMentions: string[] = [];
+        if (isAgingCurveApplied) {
+          algorithmMentions.push(`• **⏳ 에이징 커브(Aging Curve) 선반영**: 30대 중반(${playerAge}세)의 에이징 커브 리스크(-${Math.round((1 - ageMultiplier) * 100)}% 감가상각)를 선반영하여 구단 친화적으로 시장 가치를 합리적으로 조정했습니다.`);
+        }
+        if (isBreakoutCandidate) {
+          algorithmMentions.push(`• **🚀 저연봉자 폭발적 인상(Breakout Multiplier)**: 1억 이하 저연봉 구간 선수로, 올 시즌 보여준 폭발적인 기여도(목표 WAR ${targetWar.toFixed(2)})를 감안해 인상률 캡(20%)을 해제한 S급 고과 기준(WAR 1.0당 4,000만원 다이렉트 인상)을 적용했습니다.`);
+        }
+        if (volumeMultiplier < 0.999) {
+          algorithmMentions.push(`• **⚖️ 표본 신뢰도 볼륨 가중치(Volume Multiplier)**: 출장 ${positionCategory === 'PITCHER' ? (isReliefPitcher ? `${pitcherInnings}이닝(50이닝 기준)` : `${pitcherInnings}이닝(120이닝 기준)`) : `${effectiveBaselineStats?.pa ?? 400}타석(400타석 기준)`} 표본에 따른 신뢰도 가중치(${(volumeMultiplier * 100).toFixed(0)}%)를 적용하여 거품을 뺀 합리적인 지표입니다.`);
+        }
+        if (isReliefPitcher) {
+          algorithmMentions.push(`• **🛡️ 불펜 투수 전용 가중치(Relief Weighting)**: 불펜/마무리 투수 전용 기준(ERA 3.50, WHIP 1.20) 및 1.5배 보너스 배수와 이닝 누적 패널티 면제를 온전히 반영했습니다.`);
+        }
+
+        setReport(`• **💎 데이터 기반 FA 시장 가치 (Market Value)**: 목표 WAR ${targetWar.toFixed(2)} 달성 시 선수의 순수 세이버메트릭스 시장 가치는 **${formatKoreanSalary(roundedMinFa)} ~ ${formatKoreanSalary(roundedMaxFa)}** (1 WAR당 1.5억~2.0억원 및 포지션 가중치) 수준에 이릅니다.${isAgingCurveApplied ? ` (※ 30대 중반의 에이징 커브 리스크를 선반영하여 구단 친화적으로 가치를 조정했습니다.)` : ""}${volumeMultiplier < 0.999 ? ` (※ 출장 타석/이닝 표본에 따른 신뢰도 가중치를 적용하여 거품을 뺀 합리적인 지표입니다.)` : ""}
+• **🎯 현실적 협상 목표액 (${isNonFA ? (isBreakoutCandidate ? "저연봉 폭발적 고과 인상 타겟" : "등록일수 미달 비FA 고과 앵커링") : "FA 자격 기준 타겟"})**: 선수의 데이터 기반 실제 시장 가치는 ${formatKoreanSalary(roundedMaxFa)} 수준이나, ${isNonFA ? (isBreakoutCandidate ? `1억 이하 저연봉 구간 선수로, 올 시즌 보여준 폭발적인 기여도(목표 WAR ${targetWar.toFixed(2)})를 감안해 인상률 캡을 해제한 S급 고과 기준(WAR 1.0당 4,000만원 다이렉트 인상)을 적용하여 전략적으로 **${formatKoreanSalary(roundedMinPractical)} ~ ${formatKoreanSalary(roundedMaxPractical)}**을 현실적 협상 목표액으로 제시합니다.` : `현재 1군 등록일수(${serviceTimeInfo.display})가 KBO 규약상 FA 자격 취득 요건(정규 7~8시즌)에 미달하는 점과 구단의 연봉 고과 산정 시스템을 존중하여, 전략적으로 **${formatKoreanSalary(roundedMinPractical)} ~ ${formatKoreanSalary(roundedMaxPractical)}**을 현실적 협상 목표액으로 제시합니다.`) : `1군 등록일수 요건을 충족한 FA 지위로서 **${formatKoreanSalary(roundedMinPractical)} ~ ${formatKoreanSalary(roundedMaxPractical)}**을 정당한 협상 목표액으로 요구합니다.`}
 • **💼 구단 프런트 설득 핵심 논리**: ${isNonFA ? `순수 세이버메트릭스 시장 가치 대비 대폭 할인된 고과 친화적 타겟임을 강조하여 구단 프런트의 예산 부담을 완화하는 동시에, ${isPureCut ? `성적 부진에 따른 연봉 삭감 방어선(최대 -${formatKoreanSalary(maxCutWon)}, -${maxCutPercent}%)을 구축하는` : `목표 성적 달성에 걸맞은 인상(+${formatKoreanSalary(maxIncreaseWon)}, +${maxIncreasePercent}%)을 쟁취하는`} 에이전트 윈-윈(Win-Win) 협상안입니다.` : `시장의 치열한 영입 경쟁 및 대체 불가능한 주전 가치를 앞세워 구단의 적극적인 예산 투입을 설득합니다.`}
-• **✨ 포지션 프리미엄 입증**: ${positionCategory === 'CATCHER' ? `도루저지율 ${catcherCsRate.toFixed(1)}%와 블로킹 PB/9 ${catcherPb9.toFixed(2)}로 안방마님 수비 안정감을 극대화합니다.` : positionCategory === 'PITCHER' ? `${pitcherInnings}이닝 소화와 평균자책점 ${pitcherEra.toFixed(2)}, WHIP ${pitcherWhip.toFixed(2)}로 에이스급 마운드 지배력을 증명합니다.` : `wRC+ ${hitterWrcPlus} 및 RF9 ${fielderRf9.toFixed(2)}의 공수겸장 기여도를 확보합니다.`}`);
+• **✨ 포지션 프리미엄 입증**: ${positionCategory === 'CATCHER' ? `도루저지율 ${catcherCsRate.toFixed(1)}%와 블로킹 PB/9 ${catcherPb9.toFixed(2)}로 안방마님 수비 안정감을 극대화합니다.` : positionCategory === 'PITCHER' ? (isReliefPitcher ? `불펜 전용 가중치(ERA ${pitcherEra.toFixed(2)}, WHIP ${pitcherWhip.toFixed(2)}, ${pitcherInnings}이닝)를 반영하여 필승조 마운드 지배력을 증명합니다.` : `${pitcherInnings}이닝 소화와 평균자책점 ${pitcherEra.toFixed(2)}, WHIP ${pitcherWhip.toFixed(2)}로 에이스급 마운드 지배력을 증명합니다.`) : `wRC+ ${hitterWrcPlus} 및 RF9 ${fielderRf9.toFixed(2)}의 공수겸장 기여도를 확보합니다.`}${algorithmMentions.length > 0 ? `\n${algorithmMentions.join("\n")}` : ""}`);
         setLoading(false);
       }, 800);
       return;
@@ -1889,18 +2269,41 @@ export default function Simulator() {
           </p>
         </div>
 
-        {/* 수기 등록 액션 버튼 */}
-        <button
-          type="button"
-          onClick={() => {
-            setSampleModalInitialPlayer(null);
-            setIsSampleModalOpen(true);
-          }}
-          className="px-3.5 py-2 rounded-xl bg-gold/15 hover:bg-gold/25 border border-gold/40 text-gold text-xs font-bold flex items-center gap-2 transition-all shadow-md shadow-gold/10 cursor-pointer self-start sm:self-auto"
-        >
-          <FlaskConical className="w-4 h-4" />
-          <span>샘플 선수 수기 등록 (로직 검증)</span>
-        </button>
+        {/* 우측 헤더 액션 버튼 그룹 */}
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          {/* 전체 DB 동기화 버튼 (타자 및 투수 최신 성적 App_data_DB 덮어쓰기) */}
+          <button
+            type="button"
+            onClick={handleSyncAllPlayers}
+            disabled={isBatchSyncing}
+            className="px-3.5 py-2 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-400 text-xs font-bold flex items-center gap-2 transition-all shadow-md shadow-blue-500/10 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isBatchSyncing ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                <span>{batchSyncProgress || "동기화 중..."}</span>
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                <span>전체 DB 동기화</span>
+              </>
+            )}
+          </button>
+
+          {/* 수기 등록 액션 버튼 */}
+          <button
+            type="button"
+            onClick={() => {
+              setSampleModalInitialPlayer(null);
+              setIsSampleModalOpen(true);
+            }}
+            className="px-3.5 py-2 rounded-xl bg-gold/15 hover:bg-gold/25 border border-gold/40 text-gold text-xs font-bold flex items-center gap-2 transition-all shadow-md shadow-gold/10 cursor-pointer"
+          >
+            <FlaskConical className="w-4 h-4" />
+            <span>샘플 선수 수기 등록 (로직 검증)</span>
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
@@ -2295,11 +2698,13 @@ export default function Simulator() {
                               <button
                                 type="button"
                                 onClick={() => setIsYearDropdownOpen((prev) => !prev)}
-                                className="px-2.5 py-1.5 rounded-lg bg-[#1a202c] hover:bg-[#252e3e] border border-gold/40 hover:border-gold text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                                className={`px-2.5 py-1.5 rounded-lg bg-[#1a202c] hover:bg-[#252e3e] border text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer ${
+                                  baselineYear ? "border-gold/40 hover:border-gold text-white" : "border-amber-500 text-amber-300 animate-pulse"
+                                }`}
                                 title="기준 년도를 선택하여 해당 시즌의 DB 성적을 불러옵니다"
                               >
                                 <Calendar className="w-3.5 h-3.5 text-gold shrink-0" />
-                                <span>{baselineYear}년</span>
+                                <span>{baselineYear ? `${baselineYear}년` : "연도 선택"}</span>
                                 <ChevronDown
                                   className={`w-3.5 h-3.5 text-gold transition-transform duration-200 ${
                                     isYearDropdownOpen ? "rotate-180" : ""
@@ -2326,10 +2731,7 @@ export default function Simulator() {
                                         <button
                                           key={yr}
                                           type="button"
-                                          onClick={() => {
-                                            setBaselineYear(yr);
-                                            setIsYearDropdownOpen(false);
-                                          }}
+                                          onClick={() => handleSelectBaselineYear(yr)}
                                           className={`w-full px-3 py-2 text-xs flex items-center justify-between text-left transition-all cursor-pointer ${
                                             isSelected
                                               ? "bg-gold/20 text-gold font-bold"
@@ -2371,8 +2773,12 @@ export default function Simulator() {
                             {/* 시즌 안내 태그 & 로딩 인디케이터 */}
                             <div className="flex items-center justify-between text-[11px] bg-white/5 px-2.5 py-1.5 rounded-lg border border-white/5">
                               <div className="flex items-center gap-1.5 text-gray-300">
-                                <span className="font-semibold text-white">{baselineYear}년 실제 기록</span>
-                                {isBaselineLoading ? (
+                                <span className="font-semibold text-white">
+                                  {baselineYear ? `${baselineYear}년 실제 기록` : "연도 미선택 (연도를 선택하세요)"}
+                                </span>
+                                {!baselineYear ? (
+                                  <span className="text-[10px] text-amber-400 font-medium">연도 선택 대기</span>
+                                ) : isBaselineLoading ? (
                                   <Loader2 className="w-3 h-3 animate-spin text-gold" />
                                 ) : effectiveBaselineStats?.hasDbRecord ? (
                                   <span className="text-[10px] text-emerald-400 font-medium">● DB 연동완료</span>
@@ -2380,12 +2786,17 @@ export default function Simulator() {
                                   <span className="text-[10px] text-gray-400">참고치</span>
                                 )}
                               </div>
-                              {effectiveBaselineStats?.salaryWon ? (
-                                <span className="text-gold font-mono font-bold text-[11px]">
-                                  연봉 {formatKoreanSalary(effectiveBaselineStats.salaryWon)}
-                                </span>
-                              ) : null}
                             </div>
+
+                            {/* [요구사항 1]: 기준 지표 카드에 연봉을 직접 입력할 수 있는 입력칸 추가 */}
+                            <BaselineSalaryInput
+                              year={baselineYear}
+                              isSample={isSamplePlayer}
+                              value={manualBaselineSalaryText}
+                              onChange={setManualBaselineSalaryText}
+                              salaryWon={effectiveBaselineSalaryWon}
+                              isLoading={isBaselineLoading}
+                            />
 
                             {/* 지표 리스트 (카드형 배치) */}
                             <div className="flex flex-col gap-2.5">
@@ -2401,7 +2812,7 @@ export default function Simulator() {
                                   </div>
                                 </div>
                                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/5 text-gray-300 border border-white/10">
-                                  {(effectiveBaselineStats?.war ?? 0) >= 4.5 ? "올스타/MVP급" : (effectiveBaselineStats?.war ?? 0) >= 3.0 ? "주전 주축급" : (effectiveBaselineStats?.war ?? 0) >= 1.5 ? "주전급" : "백업/교체급"}
+                                  {!baselineYear ? "연도 미선택" : (effectiveBaselineStats?.war ?? 0) >= 4.5 ? "올스타/MVP급" : (effectiveBaselineStats?.war ?? 0) >= 3.0 ? "주전 주축급" : (effectiveBaselineStats?.war ?? 0) >= 1.5 ? "주전급" : "백업/교체급"}
                                 </span>
                               </div>
 
@@ -2412,12 +2823,12 @@ export default function Simulator() {
                                   <div className="text-sm font-bold text-white flex items-baseline gap-1">
                                     <span>wRC+</span>
                                     <span className="text-base text-amber-300 font-mono">
-                                      {effectiveBaselineStats ? effectiveBaselineStats.wrcPlus : 100}
+                                      {effectiveBaselineStats ? effectiveBaselineStats.wrcPlus : 0}
                                     </span>
                                   </div>
                                 </div>
                                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">
-                                  {(effectiveBaselineStats?.wrcPlus ?? 100) >= 135 ? "특급 (상위 5%)" : (effectiveBaselineStats?.wrcPlus ?? 100) >= 115 ? "리그 우수" : (effectiveBaselineStats?.wrcPlus ?? 100) >= 95 ? "리그 평균" : "평균 이하"}
+                                  {!baselineYear ? "연도 미선택" : (effectiveBaselineStats?.wrcPlus ?? 0) >= 135 ? "특급 (상위 5%)" : (effectiveBaselineStats?.wrcPlus ?? 0) >= 115 ? "리그 우수" : (effectiveBaselineStats?.wrcPlus ?? 0) >= 95 ? "리그 평균" : "평균 이하"}
                                 </span>
                               </div>
 
@@ -2428,13 +2839,13 @@ export default function Simulator() {
                                   <div className="text-sm font-bold text-white flex items-baseline gap-1">
                                     <span>OPS</span>
                                     <span className="text-base text-amber-300 font-mono">
-                                      {effectiveBaselineStats ? effectiveBaselineStats.ops.toFixed(3) : "0.750"}
+                                      {effectiveBaselineStats ? effectiveBaselineStats.ops.toFixed(3) : "0.000"}
                                     </span>
                                   </div>
                                 </div>
                                 <div className="text-right font-mono text-[11px] text-gray-400">
-                                  {effectiveBaselineStats?.avg !== undefined && <span>.{Math.round(effectiveBaselineStats.avg * 1000)} 타율</span>}
-                                  {effectiveBaselineStats?.hr !== undefined && <span className="ml-1.5">{effectiveBaselineStats.hr}홈런</span>}
+                                  {effectiveBaselineStats?.avg !== undefined && effectiveBaselineStats.avg > 0 && <span>.{Math.round(effectiveBaselineStats.avg * 1000)} 타율</span>}
+                                  {effectiveBaselineStats?.hr !== undefined && effectiveBaselineStats.hr > 0 && <span className="ml-1.5">{effectiveBaselineStats.hr}홈런</span>}
                                 </div>
                               </div>
 
@@ -2452,13 +2863,13 @@ export default function Simulator() {
                                     <div className="bg-black/30 p-2 rounded border border-white/5">
                                       <span className="text-[10px] text-gray-400 block">도루저지율 (CS%)</span>
                                       <span className="font-mono font-bold text-amber-300 text-sm">
-                                        {effectiveBaselineStats?.csRate !== undefined ? `${effectiveBaselineStats.csRate.toFixed(1)}%` : "30.0%"}
+                                        {effectiveBaselineStats?.csRate !== undefined ? `${effectiveBaselineStats.csRate.toFixed(1)}%` : "0.0%"}
                                       </span>
                                     </div>
                                     <div className="bg-black/30 p-2 rounded border border-white/5">
                                       <span className="text-[10px] text-gray-400 block">블로킹 (PB/9)</span>
                                       <span className="font-mono font-bold text-emerald-400 text-sm">
-                                        {effectiveBaselineStats?.pb9 !== undefined ? effectiveBaselineStats.pb9.toFixed(2) : "0.38"}
+                                        {effectiveBaselineStats?.pb9 !== undefined ? effectiveBaselineStats.pb9.toFixed(2) : "0.00"}
                                       </span>
                                     </div>
                                   </div>
@@ -2467,13 +2878,13 @@ export default function Simulator() {
                                     <div className="bg-black/30 p-2 rounded border border-white/5">
                                       <span className="text-[10px] text-gray-400 block">수비 범위 (RF9)</span>
                                       <span className="font-mono font-bold text-emerald-400 text-sm">
-                                        {effectiveBaselineStats?.rf9 !== undefined ? effectiveBaselineStats.rf9.toFixed(2) : "3.85"}
+                                        {effectiveBaselineStats?.rf9 !== undefined ? effectiveBaselineStats.rf9.toFixed(2) : "0.00"}
                                       </span>
                                     </div>
                                     <div className="bg-black/30 p-2 rounded border border-white/5">
                                       <span className="text-[10px] text-gray-400 block">순수 장타율 (ISO)</span>
                                       <span className="font-mono font-bold text-emerald-400 text-sm">
-                                        {effectiveBaselineStats?.iso !== undefined ? effectiveBaselineStats.iso.toFixed(3) : "0.165"}
+                                        {effectiveBaselineStats?.iso !== undefined ? effectiveBaselineStats.iso.toFixed(3) : "0.000"}
                                       </span>
                                     </div>
                                   </div>
@@ -2484,13 +2895,19 @@ export default function Simulator() {
                         ) : (
                           /* [요구사항 2] 샘플 선수: 기준 지표 수동 입력 슬라이더 / 직접 입력 */
                           <div className="flex flex-col gap-3.5">
+                            {/* [요구사항 1]: 기준 지표 카드에 연봉을 직접 입력할 수 있는 입력칸 추가 */}
+                            <BaselineSalaryInput
+                              year={baselineYear}
+                              isSample={isSamplePlayer}
+                              value={manualBaselineSalaryText}
+                              onChange={setManualBaselineSalaryText}
+                              salaryWon={effectiveBaselineSalaryWon}
+                              isLoading={isBaselineLoading}
+                            />
+
                             <div className="flex items-center justify-between text-[11px] bg-gold/10 px-2.5 py-1.5 rounded-lg border border-gold/20">
                               <span className="font-semibold text-gold">기준 실적 스탯 직접 조절</span>
-                              {effectiveBaselineStats?.salaryWon ? (
-                                <span className="text-gold font-mono font-bold text-[11px]">
-                                  기준 연봉 {formatKoreanSalary(effectiveBaselineStats.salaryWon)}
-                                </span>
-                              ) : null}
+                              <span className="text-[10px] text-gold/80">슬라이더 및 수치 조절</span>
                             </div>
 
                             {/* 기준 WAR */}
@@ -3017,12 +3434,17 @@ export default function Simulator() {
                                   <span className="text-[10px] text-gray-400">참고치</span>
                                 )}
                               </div>
-                              {effectiveBaselineStats?.salaryWon ? (
-                                <span className="text-gold font-mono font-bold text-[11px]">
-                                  연봉 {formatKoreanSalary(effectiveBaselineStats.salaryWon)}
-                                </span>
-                              ) : null}
                             </div>
+
+                            {/* [요구사항 1]: 기준 지표 카드에 연봉을 직접 입력할 수 있는 입력칸 추가 */}
+                            <BaselineSalaryInput
+                              year={baselineYear}
+                              isSample={isSamplePlayer}
+                              value={manualBaselineSalaryText}
+                              onChange={setManualBaselineSalaryText}
+                              salaryWon={effectiveBaselineSalaryWon}
+                              isLoading={isBaselineLoading}
+                            />
 
                             {/* 지표 리스트 (카드형 배치 4개) */}
                             <div className="flex flex-col gap-2.5">
@@ -3102,13 +3524,19 @@ export default function Simulator() {
                         ) : (
                           /* 샘플 선수: 기준 지표 수동 입력 슬라이더 / 직접 입력 */
                           <div className="flex flex-col gap-3.5">
+                            {/* [요구사항 1]: 기준 지표 카드에 연봉을 직접 입력할 수 있는 입력칸 추가 */}
+                            <BaselineSalaryInput
+                              year={baselineYear}
+                              isSample={isSamplePlayer}
+                              value={manualBaselineSalaryText}
+                              onChange={setManualBaselineSalaryText}
+                              salaryWon={effectiveBaselineSalaryWon}
+                              isLoading={isBaselineLoading}
+                            />
+
                             <div className="flex items-center justify-between text-[11px] bg-gold/10 px-2.5 py-1.5 rounded-lg border border-gold/20">
                               <span className="font-semibold text-gold">기준 실적 스탯 직접 조절</span>
-                              {effectiveBaselineStats?.salaryWon ? (
-                                <span className="text-gold font-mono font-bold text-[11px]">
-                                  기준 연봉 {formatKoreanSalary(effectiveBaselineStats.salaryWon)}
-                                </span>
-                              ) : null}
+                              <span className="text-[10px] text-gold/80">슬라이더 및 수치 조절</span>
                             </div>
 
                             {/* 기준 WAR */}
@@ -3494,25 +3922,43 @@ export default function Simulator() {
                 )}
               </div>
 
-              {/* 현재 연봉 대비 인상률 비교 */}
+              {/* 기준 지표 연봉 대비 인상률 비교 */}
               <div className="flex items-center gap-2 mt-1 text-xs text-gray-300 font-mono flex-wrap justify-center">
-                <span className="text-[11px]">현재 연봉: <strong className="text-white">{selectedPlayer ? formatKoreanSalary(currentSalaryWon) : "0원"}</strong></span>
+                <span className="text-[11px]">
+                  기준 연봉:{" "}
+                  <strong className="text-white">
+                    {selectedPlayer
+                      ? baselineBaseSalaryWon > 0
+                        ? formatKoreanSalary(baselineBaseSalaryWon)
+                        : "미입력"
+                      : "0원"}
+                  </strong>
+                  {selectedPlayer && !isSamplePlayer && (
+                    <span className="text-[10px] text-gray-400 ml-1">({baselineYear}년)</span>
+                  )}
+                </span>
                 <span className="text-gray-600">•</span>
                 {selectedPlayer ? (
-                  isPureIncrease ? (
-                    <span className="text-[13px] text-emerald-400 font-bold">
-                      최대 +{formatKoreanSalary(maxIncreaseWon)} 인상 타겟 (+{maxIncreasePercent}%)
-                    </span>
-                  ) : isPureCut ? (
-                    <span className="text-[13px] text-rose-400 font-bold">
-                      최대 -{formatKoreanSalary(maxCutWon)} 삭감 예상 (-{maxCutPercent}%)
-                    </span>
-                  ) : isMixed ? (
-                    <span className="text-[13px] text-amber-400 font-bold">
-                      최대 -{formatKoreanSalary(maxCutWon)} 삭감 ~ +{formatKoreanSalary(maxIncreaseWon)} 인상 변동 구간
-                    </span>
+                  baselineBaseSalaryWon > 0 ? (
+                    isPureIncrease ? (
+                      <span className="text-[13px] text-emerald-400 font-bold">
+                        최대 +{formatKoreanSalary(maxIncreaseWon)} 인상 타겟 (+{maxIncreasePercent}%)
+                      </span>
+                    ) : isPureCut ? (
+                      <span className="text-[13px] text-rose-400 font-bold">
+                        최대 -{formatKoreanSalary(maxCutWon)} 삭감 예상 (-{maxCutPercent}%)
+                      </span>
+                    ) : isMixed ? (
+                      <span className="text-[13px] text-amber-400 font-bold">
+                        최대 -{formatKoreanSalary(maxCutWon)} 삭감 ~ +{formatKoreanSalary(maxIncreaseWon)} 인상 변동 구간
+                      </span>
+                    ) : (
+                      <span className="text-[13px] text-amber-400 font-bold">기준 연봉 수준 유지 권고 (0%)</span>
+                    )
                   ) : (
-                    <span className="text-[13px] text-amber-400 font-bold">현재 연봉 수준 유지 권고 (0%)</span>
+                    <span className="text-[12px] text-amber-300 font-medium">
+                      기준 연봉을 입력하시면 정확한 예상 인상/삭감률이 표시됩니다
+                    </span>
                   )
                 ) : (
                   <span className="text-[13px] text-gray-400">선수 검색 대기 중</span>
@@ -3534,34 +3980,49 @@ export default function Simulator() {
 
             {/* 2. 그 바로 아래: [데이터 기반 FA 환산 가치] 카드/배지 */}
             <div className="w-full mt-5 pt-4 border-t border-white/10">
-              <div className="bg-black/40 border border-gold/20 rounded-xl p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3 text-left">
-                <div>
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-gray-200">
-                    <Sparkles className="w-3.5 h-3.5 text-gold" />
-                    <span className="text-[14px]">데이터 기반 FA 환산 가치 (Market Value)</span>
-                    <span className="text-[12px] font-normal text-gray-400 hidden sm:inline">(WAR 1.0당 1.5억~2.0억원 기준)</span>
+              <div className="bg-black/40 border border-gold/20 rounded-xl p-3.5 flex flex-col gap-2.5">
+                {/* 상단 1행: 타이틀 및 환산 가치 금액 (1줄로 표시, 공간 좁을 시 ml-auto로 깔끔하게 줄바꿈) */}
+                <div className="flex items-center justify-between gap-2.5 flex-wrap">
+                  <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                    <Sparkles className="w-4 h-4 text-gold shrink-0" />
+                    <span className="text-xs sm:text-sm font-bold text-white whitespace-nowrap">
+                      데이터 기반 FA 환산 가치
+                    </span>
+                    <span className="text-[10px] sm:text-[11px] font-mono font-semibold text-gold px-1.5 py-0.5 rounded bg-gold/10 border border-gold/25 whitespace-nowrap">
+                      Market Value
+                    </span>
+                    <span className="text-[11px] font-normal text-gray-400 whitespace-nowrap hidden 2xl:inline">
+                      (WAR 1.0당 1.5억~2.0억원 기준)
+                    </span>
                   </div>
-                  <div className="text-[12px] text-gray-400 mt-0.5">
-                    구단 협상 시 상한 앵커링(Anchoring) 논리 근거 • 시장 대비 대폭 할인 설득 활용
+
+                  <div className="text-right whitespace-nowrap ml-auto">
+                    {selectedPlayer ? (
+                      <div className="flex items-baseline gap-1 font-mono">
+                        <span className="text-xs sm:text-sm font-bold text-gray-300 whitespace-nowrap">
+                          {formatKoreanSalary(roundedMinFa)}
+                        </span>
+                        <span className="text-xs text-gray-500 font-bold mx-0.5">~</span>
+                        <span className="text-sm sm:text-base font-black text-amber-300 whitespace-nowrap">
+                          {formatKoreanSalary(roundedMaxFa)}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-sm sm:text-base font-black font-mono text-gray-400 whitespace-nowrap">
+                        0원
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                <div className="text-right whitespace-nowrap">
-                  {selectedPlayer ? (
-                    <>
-                      <span className="text-sm sm:text-base font-bold font-mono text-gray-300">
-                        {formatKoreanSalary(roundedMinFa)}
-                      </span>
-                      <span className="text-xs text-gray-500 font-bold mx-1">~</span>
-                      <span className="text-base sm:text-lg font-black font-mono text-amber-300">
-                        {formatKoreanSalary(roundedMaxFa)}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="text-base sm:text-lg font-black font-mono text-gray-400">
-                      0원
-                    </span>
-                  )}
+                {/* 하단 2행: 협상 앵커링 팁 & 기준 안내 (전체 너비 활용하여 1~2줄 깔끔 줄바꿈) */}
+                <div className="flex items-center justify-between gap-2 text-[11px] text-gray-400 pt-1.5 border-t border-white/5 flex-wrap">
+                  <span className="leading-normal break-keep">
+                    구단 협상 시 상한 앵커링(Anchoring) 논리 근거 • 시장 대비 대폭 할인 설득 활용
+                  </span>
+                  <span className="text-[10px] text-gray-500 whitespace-nowrap 2xl:hidden">
+                    (WAR 1.0당 1.5억~2.0억원 기준)
+                  </span>
                 </div>
               </div>
             </div>
